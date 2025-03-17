@@ -1,0 +1,5 @@
+libcap-devel
+        libacl-devel
+        libselinux-devel
+        libseccomp-devel
+	libxcrypt-devel
