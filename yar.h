@@ -57,6 +57,7 @@ typedef struct  {
   char   *name;               // user defined name (link is by default name)
   char   *cmdline;            // shell command line of command  
   char   *log;                // path to log (copy of all data written and read)
+  evntdesc_t pidfded;         // pidfd event descriptor;
   double  delay;              // time between writes
   pid_t   pid;                // process id of running command
   size_t  n;                  // number of bytes in buffer

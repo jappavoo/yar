@@ -37,12 +37,75 @@ static bool
 cmdstrParse(char *cmdstr, char **name, char **cmdline,
 	    double *delay, char **ttylink, char **log)
 {
-  *name    = "thecmd";
-  *cmdline = cmdstr;
-  *delay   = 0.0;
-  *ttylink = *name;
-  *log     = NULL;
-  return true;
+  char *nptr, *orig; // next token pointer, original cmdstr
+  bool rc=true;
+  
+  orig = malloc(strlen(cmdstr));
+  strcpy(orig, cmdstr);
+  
+  nptr = strsep(&cmdstr, ",");  // parse name
+  if (nptr == NULL || cmdstr == NULL) {
+    EPRINT("Bad command name: %s\n", orig);
+    rc = false;
+    goto done;
+  }
+  *name=nptr;
+  
+  nptr = strsep(&cmdstr, ",");     // parse ttylink
+  if (nptr == NULL || cmdstr == NULL) {
+    EPRINT("Bad ttylink: %s\n", orig);
+    rc = false;
+    goto done;
+  }
+  if (*nptr == 0) { // none specified
+    *ttylink = *name;
+  } else {
+    *ttylink = nptr;
+  }
+
+  nptr = strsep(&cmdstr, ",");     // parse log
+  if (nptr == NULL || cmdstr == NULL) {
+    EPRINT("Bad log path: %s\n", orig);
+    rc = false;
+    goto done;
+  }
+  if (*nptr == 0) { // none specified
+    // change log to NULL
+    *log = NULL;
+  } else {
+    *log = nptr;
+  }
+
+  nptr = strsep(&cmdstr, ",");   // parse delay value string
+  if (nptr == NULL || cmdstr == NULL) {
+    EPRINT("Bad delay: %s\n", orig);
+    rc = false;
+    goto done;
+  }
+  if (*nptr==0) { // none specified
+    // change log to NULL
+    *delay   = 0.0;
+  } else {
+    errno = 0;
+    *delay = strtod(nptr, NULL);
+    if (errno != 0) {
+      perror("bad delay value");
+      rc = false;
+      goto done;
+    }
+  }
+
+  // commandline is everthing that list left (avoid parsing incase command
+  // line uses , itself (eg socat)
+  if (cmdstr == NULL || *cmdstr == 0) {
+    EPRINT("bad cmdline: command must not be empty: %s\n", orig);
+    rc = false;
+    goto done;
+  }
+  *cmdline=cmdstr;
+ done:
+    free(orig);
+    return rc;
 }
 
 static bool
@@ -170,8 +233,11 @@ theLoop()
   evntdesc_t *ed;
   uint32_t evnts;
   
-  epollfd = epoll_create1(0);
-  assert(epollfd != -1);
+  epollfd = epoll_create1(EPOLL_CLOEXEC);
+  if (epollfd == -1) {
+    perror("epoll_create1");
+    return false;
+  }
   evntdesc_t bttyfded = { .hdlr=bcastfdEventHandler, &GBLS.btty };
   
   // epoll man page recommends non-blocking io for edgetriggered use 
@@ -183,7 +249,19 @@ theLoop()
     perror("epoll_ctl: GBLS.btty");
     return false;
   }
-    
+
+  // add fds of each command to the poll
+  {
+    cmd_t *cmd, *tmp;
+    HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
+      ev.data.ptr = &cmd->pidfded;
+      if (epoll_ctl(epollfd, EPOLL_CTL_ADD, cmd->pidfd, &ev) == -1 ) {
+	perror("epoll_ctl: GBLS.btty");
+	return false;
+      }
+    }
+  }
+  
   for (;;) {
     int nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
     if (nfds == -1) {
@@ -214,7 +292,7 @@ theLoop()
   return erc;
 }
 
-extern 
+extern
 void cleanup(void)
 {
   VPRINT("%s", "exiting\n");
@@ -222,10 +300,7 @@ void cleanup(void)
   {
     cmd_t *cmd, *tmp;
     HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-      VPRINT("%s", "cleanup up cmd:");
-      if (verbose(1)) {
-	cmdDump(cmd, stderr, "\n  ");
-      }
+      VPRINT("cleanup up cmd %s\n", cmd->name);
       cmdCleanup(cmd);
       HASH_DEL(GBLS.cmds, cmd);
       free(cmd);
