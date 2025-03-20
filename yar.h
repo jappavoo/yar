@@ -31,7 +31,7 @@ typedef enum {
   EVNT_HDLR_SUCCESS=0,
   EVNT_HDLR_FAILED=-1,
   EVNT_HDLR_EXIT_LOOP=1 } evnthdlrrc_t;
-typedef  evnthdlrrc_t (* evnthdlr_t)(void *, uint32_t);
+typedef  evnthdlrrc_t (* evnthdlr_t)(void *, uint32_t, int);
 typedef struct {
   evnthdlr_t hdlr;
   void *obj;
@@ -44,7 +44,9 @@ typedef struct {
   char     *link;              // link path to tty path
   uint64_t  rbytes;            // number of bytes read from tty
   uint64_t  wbytes;            // number of bytes written to tty
-  int       fd;                // fd used to communicate with tty (master)
+  int       mfd;               // fd used to communicate with tty (master)
+  int       sfd;               // fd used to hold a reference to the slave
+                               // tty if we want to keep it alive
   int       ifd;               // inotifyfd
   int       ccnt;              // count of active clients (current opens of tty)
 } tty_t;
@@ -52,16 +54,20 @@ typedef struct {
 typedef struct  {
   uint8_t buf[CMD_BUFSIZE];   // buffer of data read from command
   UT_hash_handle hh;          // hashtable handle
-  tty_t   cmdtty;             // tty command process is connected to
+  tty_t   cmdtty;             // tty used to communicate with the cmd process
   tty_t   clttty;             // tty clients can use to talk directly to cmd
+  evntdesc_t pidfded;         // pidfd event descriptor;
+  evntdesc_t cmdttyed;        // cmdtty event descriptor;
+  evntdesc_t cltttyed;        // clttty event descriptor;
   char   *name;               // user defined name (link is by default name)
   char   *cmdline;            // shell command line of command  
   char   *log;                // path to log (copy of all data written and read)
-  evntdesc_t pidfded;         // pidfd event descriptor;
   double  delay;              // time between writes
   pid_t   pid;                // process id of running command
-  size_t  n;                  // number of bytes in buffer
+  size_t  n;                  // number of bytes buffered since last flush
   int     pidfd;              // pid fd to monitor for termination
+  int     exitstatus;         // exit status if command terminates
+  bool    retry;              // retry if exit
 } cmd_t;
 
 typedef struct {

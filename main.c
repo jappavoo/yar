@@ -127,7 +127,7 @@ GBLSAddCmd(char *cmdstr)
       free(cmd);
       return false;
     }
-    if (!cmdCreate(cmd)) {
+    if (!cmdCreate(cmd, true)) {
       cmdDump(cmd, stderr, "Failed to create");
       cmdCleanup(cmd);
       free(cmd);
@@ -141,6 +141,18 @@ GBLSAddCmd(char *cmdstr)
     return false;
   }
   return true;
+}
+
+static int
+GBLSCmdsWriteChar(char c)
+{
+  int n, cnt=0;
+  cmd_t *cmd, *tmp;
+  HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
+    n=cmdWriteChar(cmd, c);
+    if (n) cnt++;
+  }
+  return cnt;
 }
 
 static bool
@@ -196,29 +208,41 @@ fdSetnonblocking(int fd)
 }
 
 evnthdlrrc_t
-bcastfdEventHandler(void *obj, uint32_t evnts)
+bcastfdEventHandler(void *obj, uint32_t evnts, int epollfd)
 {
   assert(obj == &GBLS.btty);
   VLPRINT(2, "btty FD  evnts:%08x", evnts);
   if (evnts & EPOLLIN) {
     VLPRINT(2,"EPOLLIN(%x)\n", EPOLLIN);
+    char c;
+    int n = ttyReadChar(&GBLS.btty, &c);
+    if (verbose(2)) {
+      if (n) fprintf(stderr, "btty: %c(%02x)\n", c, c);
+      else fprintf(stderr, "bgtty: n=%d\n", n);
+    }
+    GBLSCmdsWriteChar(c);
     evnts = evnts & ~EPOLLIN;
+    if (evnts==0) goto done;
   }
   if (evnts & EPOLLHUP) {
     VLPRINT(2,"EPOLLHUP(%x)\n", EPOLLHUP);
     evnts = evnts & ~EPOLLHUP;
+    if (evnts==0) goto done;
   }
   if (evnts & EPOLLRDHUP) {
     VLPRINT(2,"EPOLLRDHUP(%x)\n", EPOLLRDHUP);
     evnts = evnts & ~EPOLLRDHUP;
+    if (evnts==0) goto done;
   }
   if (evnts & EPOLLERR) {
     VLPRINT(2,"EPOLLERR(%x)\n", EPOLLERR);
     evnts = evnts & ~EPOLLRDHUP;
+    if (evnts==0) goto done;
   }
   if (evnts != 0) {
     VLPRINT(2,"unknown events evnts:%x", evnts);
   }
+ done:
   return EVNT_HDLR_SUCCESS;
 }
 
@@ -227,69 +251,96 @@ bcastfdEventHandler(void *obj, uint32_t evnts)
 static bool
 theLoop()
 {
+  bool rc;
   int epollfd;
-  struct epoll_event ev, events[MAX_EVENTS];
-  evnthdlrrc_t erc;
-  evntdesc_t *ed;
-  uint32_t evnts;
-  
-  epollfd = epoll_create1(EPOLL_CLOEXEC);
-  if (epollfd == -1) {
-    perror("epoll_create1");
-    return false;
-  }
-  evntdesc_t bttyfded = { .hdlr=bcastfdEventHandler, &GBLS.btty };
-  
-  // epoll man page recommends non-blocking io for edgetriggered use 
-  fdSetnonblocking(GBLS.btty.fd);
-  ev.events   = EPOLLIN | EPOLLET | EPOLLHUP | EPOLLRDHUP | EPOLLERR;
-  ev.data.ptr = &bttyfded;
+  struct epoll_event ev;
 
-  if (epoll_ctl(epollfd, EPOLL_CTL_ADD, GBLS.btty.fd, &ev) == -1 ) {
-    perror("epoll_ctl: GBLS.btty");
-    return false;
+  // create the kernel poll object
+  {
+    epollfd = epoll_create1(EPOLL_CLOEXEC);
+    if (epollfd == -1) {
+      perror("epoll_create1");
+      return false;
+    }
+  }
+  // register broadcast pty poll set 
+  {
+    evntdesc_t bttyfded = { .hdlr=bcastfdEventHandler, &GBLS.btty }; 
+    // we use non blocking reads and watch for EAGAIN on writes
+    // to see when we have exhausted the kernel tty port buffer
+    fdSetnonblocking(GBLS.btty.mfd);
+    ev.data.ptr = &bttyfded;
+    // edge triggered
+    ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR; // | EPOLLET;
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, GBLS.btty.mfd, &ev) == -1 ) {
+      perror("epoll_ctl: GBLS.btty");
+      return false;
+    }
   }
 
-  // add fds of each command to the poll
+  // register initial commands to the poll set
   {
     cmd_t *cmd, *tmp;
     HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
       ev.data.ptr = &cmd->pidfded;
+      // edge triggered
+      ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
       if (epoll_ctl(epollfd, EPOLL_CTL_ADD, cmd->pidfd, &ev) == -1 ) {
-	perror("epoll_ctl: GBLS.btty");
+	perror("epoll_ctl: cmd->pidfd");
+	return false;
+      }
+      // level triggered 
+      ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR;
+      ev.data.ptr = &cmd->cmdttyed;
+      if (epoll_ctl(epollfd, EPOLL_CTL_ADD, cmd->cmdtty.mfd, &ev) == -1 ) {
+	perror("epoll_ctl: cmd->cmdtty.fd");
+	return false;
+      }
+      ev.data.ptr = &cmd->cltttyed;
+      if (epoll_ctl(epollfd, EPOLL_CTL_ADD, cmd->clttty.mfd, &ev) == -1 ) {
+	perror("epoll_ctl: cmd->clttty.mfd");
 	return false;
       }
     }
   }
-  
+
+  // detect and process events
   for (;;) {
+    struct epoll_event events[MAX_EVENTS];
     int nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
     if (nfds == -1) {
       perror("epoll_wait");
       if (errno == EINTR) continue;
-      return false;
+      rc = false;
+      goto done;
     }
     for (int n = 0; n < nfds; ++n) {
-      ed = events[n].data.ptr;
-      evnts = events[n].events;
+      evnthdlrrc_t erc;
+      evntdesc_t *ed = events[n].data.ptr;
+      uint32_t evnts = events[n].events;
       assert(ed);
-      VLPRINT(2, "ed: 0x%p (.hdlr=0x%p .obj=Ox%p) evnts:0x%08x\n",
-	      ed, ed->hdlr, ed->obj, evnts);
+      VLPRINT(2, "%d/%d: ed: 0x%p (.hdlr=0x%p .obj=Ox%p) evnts:0x%08x\n",
+	      n, nfds, ed, ed->hdlr, ed->obj, evnts);
       assert(ed->hdlr);
-      // call handler registered for this event source
-      erc = ed->hdlr(ed->obj, evnts);
+      // call handler registered for this event source 
+      erc = ed->hdlr(ed->obj, evnts, epollfd);
       if (erc == EVNT_HDLR_EXIT_LOOP) {
 	VLPRINT(1, "eventhandler returned exiting loop rc"
 		" hdlr:0x%p obj:0x%p evnts:%08x\n", ed->hdlr, ed->obj, evnts);
-	break;
+	rc = true;
+	goto done;
       } else if (erc == EVNT_HDLR_FAILED) {
 	EPRINT("event handler failed hdlr:0x%p obj:0x%p evnts:%08x\n",
 	       ed->hdlr, ed->obj, evnts);
-	break;
+	rc = false;
+	goto done;
       }
     }
   }
-  return erc;
+  
+  // Exit logic
+ done:
+  return rc;
 }
 
 extern
@@ -328,7 +379,7 @@ int main(int argc, char **argv)
   if (!argsParse(argc, argv)) EEXIT();
 
   // create the broadcast tty
-  if (!ttyCreate(&GBLS.btty)) EEXIT();
+  if (!ttyCreate(&GBLS.btty, true)) EEXIT();
 
   if (!theLoop()) EEXIT();
   
