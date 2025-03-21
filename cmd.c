@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <tty/tty_functions.h>
+#include <time.h>
 
 // Macros to help with circular cmdbuffer management --
 //   This likely could be improved but wrote for comprehension not performance
@@ -35,6 +36,8 @@ cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
   this->pidfd      = -1;
   this->exitstatus = -1;
   this->retry      = true;
+  this->lastwrite.tv_sec  = 0;
+  this->lastwrite.tv_nsec = 0;  
   ttyInit(&(this->cmdtty), NULL);
   ttyInit(&(this->clttty), ttylink);
   return true;
@@ -52,13 +55,18 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
 {
   assert(this);
   int i=cmdbufNtoI(this->n);
-  int lastchar=this->buf[i];
-  fprintf(f, "%scmd: this=0x%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
+  int c=this->buf[i];
+  asciistr_t charstr = { 0,0,0,0 };
+  ascii_char2str(i, charstr);
+  
+  fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
 	  "    cmdline=\"%s\" \n    delay=%f log=%s n=%lu"
-	  " lastchar:buf[%d]=02x(%c)\n", prefix, this,
+	  " lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n", prefix, this,
 	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
-	  this->cmdline, this->delay, this->log, this->n,i,lastchar);
-  if (this->n && verbose(3)) {
+	  this->cmdline, this->delay, this->log, this->n,
+	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
+  
+  if (this->n) {
     if (!cmdbufWrapped(this->n)) {
       hexdump(f, this->buf, this->n);
     } else {
@@ -75,24 +83,38 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
 }
 
 static int
-cmdttyBufIn(cmd_t *this)
+cmdttyBufOutput(cmd_t *this, uint32_t evnts)
 {
   char c;
-  int n = ttyReadChar(&(this->cmdtty), &c);
+  tty_t *tty = &(this->cmdtty);
+  int fd = tty->mfd;
+  int n  = ttyReadChar(tty, &c, NULL, 0);
   if (n==0) {
     VLPRINT(2, "%p: read returned 0\n", this);
     NYI;
   } else if (n==1)  {
-    VLPRINT(2, "cmdttyBufIn:%s(%p):%02x(%c)\n", this->name,
-	    this, c, c);
+    if (evnts && verbose(2)) {
+      asciistr_t charstr;
+      ascii_char2str(c, charstr);
+      fprintf(stderr,"cmdttyEvent: ---> CMDTTY: START: EIN: tty(%p):%s(%s) fd:%d"
+		 " evnts:0x%08x cmd:%p(%s) n:%d: "
+	      "%02x(%s)\n", tty, tty->link, tty->path, fd, evnts, this,
+	      this->name, n, c, charstr);
+      
+    }
     int i        = cmdbufNtoI(this->n);    // account for circular buffer
     this->buf[i] = c;                      // store character in buffer
     this->n++;                             // inc n -- bytes since last flush        
-    n = ttyWriteChar(&(this->clttty), c);  // send data to our client tty
+    n = ttyWriteChar(&(this->clttty), c, NULL);  // send data to our client tty
     if (n != 1) NYI;
-    n = ttyWriteChar(&GBLS.btty, c);       // send data to broadcast tty
-    if (n != 1) NYI;
-    if (verbose(3)) cmdDump(this, stderr, "DATA-IN:");
+    n += ttyWriteChar(&GBLS.btty, c, NULL);       // send data to broadcast tty
+    if (n != 2) NYI;
+    if (evnts && verbose(2)) {
+      fprintf(stderr, "cmdttyEvent: <---  CMDTTY: END: EIN: tty(%p):%s(%s) fd:%d"
+	     " evnts:0x%08x n:%d cmd:%p(%s)\n",
+	     tty, tty->link, tty->path, fd, evnts, n, this, this->name);      
+    }
+    if (verbose(3)) cmdDump(this, stderr, "CMD OUTPUT BUFFERED:");
   } else {
     EPRINT("read returned: %d\n", n);
     perror("read");
@@ -105,7 +127,7 @@ void
 cmdttyDrain(cmd_t *this)
 {
   // drain any remaining data???
-  while (cmdttyBufIn(this)>0) {
+  while (cmdttyBufOutput(this,0)>0) {
     VLPRINT(2, "%p: got data after HUP", this->name);
   }
 }
@@ -167,11 +189,13 @@ static evnthdlrrc_t
 cmdttyEvent(void *obj, uint32_t evnts, int epollfd)
 {
   cmd_t *this = obj;
-  int fd = this->cmdtty.mfd;
-  VLPRINT(2,"Events:0x%08x on fd:%d\n", evnts, fd);
+  tty_t *tty = &(this->cmdtty);
+  int fd = tty->mfd;
+  VLPRINT(3,"START: CMDTTY tty(%p):%s(%s) fd:%d evnts:0x%08x"
+	    " cmd:%s(%p)\n", tty, tty->link, tty->path, fd, evnts,
+	  this->name, this);
   if (evnts & EPOLLIN) {
-    VLPRINT(2, "EPOLLIN(%x)\n", EPOLLIN);
-    cmdttyBufIn(this);
+    cmdttyBufOutput(this, evnts);    // date in on this fd is output from command
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
   }
@@ -179,13 +203,12 @@ cmdttyEvent(void *obj, uint32_t evnts, int epollfd)
     // now that we are keeping the slave open when we create the
     // master I don't thnk we should see this
     VLPRINT(2, "EPOLLHUP(%x)\n", EPOLLHUP);
-    assert(0);
+    fprintf(stderr, "**************************************************\n");
+    fprintf(stderr, "********** FUCKING SHIT!!!!!!!!!!!!!!!************\n");
+    fprintf(stderr, "**************************************************\n");
     cmdttyDrain(this);
     {
-      // for backwards compatiblity we use dummy versus NULL see bugs section
-      // of man epoll_ctl
-      struct epoll_event dummyev;
-      if (epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, &dummyev) == -1) {
+      if (epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, NULL) == -1) {
 	perror("epoll_ctl: EPOLL_CTL_DEL fd");
 	assert(0);
       }
@@ -207,6 +230,9 @@ cmdttyEvent(void *obj, uint32_t evnts, int epollfd)
     VLPRINT(2, "unknown events evnts:%x", evnts);
   }
  done:
+  VLPRINT(3,"END : CMDTTY tty(%p):%s(%s) fd:%d evnts:0x%08x"
+	  " cmd:%s(%p)\n", tty, tty->link, tty->path, fd, evnts,
+	  this->name, this);
   return EVNT_HDLR_SUCCESS;
 }
 
@@ -218,23 +244,29 @@ cltttyEvent(void *obj, uint32_t evnts, int epollfd)
   cmd_t *this = obj;
   tty_t *tty  = &(this->clttty);
   int    fd   = tty->mfd;
-  VLPRINT(2,"Events:0x%08x on cmd:%s(0x%p) clttty:%s(%s) fd:%d\n", evnts,
-	  this->name, this, tty->link, tty->path, fd);
+  VLPRINT(3,"START: CLTTTY tty(%p):%s(%s) fd:%d evnts:0x%08x"
+	  " cmd:%s(%p)\n", tty, tty->link, tty->path, fd, evnts,
+	  this->name, this);
   if (evnts & EPOLLIN) {
-    VLPRINT(2,"EPOLLIN(%x)\n", EPOLLIN);
     char c;
-    int n = ttyReadChar(&this->clttty, &c);
-    if (verbose(2)) {
-      if (n) fprintf(stderr, "  got: %c(%02x)\n", c, c);
-      else {
-	fprintf(stderr,   "  read returned: n=%d\n", n);
+    int n = ttyReadChar(&this->clttty, &c, &(this->lastwrite), this->delay);
+    if (n) {
+      if (verbose(2)) {
+	  asciistr_t charstr;
+	  ascii_char2str((int)c, charstr);
+	  VPRINT("---> CLTTTY: START: EIN: tty(%p):%s(%s) fd:%d"
+		 " evnts:0x%08x cmd:%p(%s) n:%d:"
+		 "%02x(%s)\n", tty, tty->link, tty->path, fd, evnts, this,
+		 this->name, n, c, charstr);
+	}
+      n=cmdWriteChar(this,c);
+      if ( n != 1 ) {
+	EPRINT("  write returned: n=%d\n", n);
 	NYI;
       }
-    }
-    n=cmdWriteChar(this,c);
-    if (n!=1) {
-      fprintf(stderr,   "  write returned: n=%d\n", n);
-      NYI;
+      VLPRINT(2, "--->  CLTTTY: END: EIN: tty(%p):%s(%s) fd:%d"
+	      " evnts:0x%08x n:%d cmd:%p(%s)\n",
+	      tty, tty->link, tty->path, fd, evnts, n, this, this->name);      
     }
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
@@ -258,6 +290,9 @@ cltttyEvent(void *obj, uint32_t evnts, int epollfd)
     VLPRINT(2,"unknown events evnts:%x", evnts);
   }
  done:
+  VLPRINT(3,"END : CLTTTY tty(%p):%s(%s) fd:%d evnts:0x%08x"
+	  " cmd:%s(%p)\n", tty, tty->link, tty->path, fd, evnts,
+	  this->name, this);
   return EVNT_HDLR_SUCCESS;
 }
 

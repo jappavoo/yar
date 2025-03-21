@@ -5,9 +5,9 @@
 extern void
 ttyDump(tty_t *this, FILE *f, char *prefix)
 {
-  fprintf(f, "%stty: this=0x%p path=%s link=%s \n"
+  fprintf(f, "%stty: this=%p path=%s link=%s \n"
              "       mfd=%d sfd=%d ifd=%d\n"
-	     "       rbytes=%lu wbytes=%lu ccnt=%d\n",
+	  "       rbytes=%lu wbytes=%lu ccnt=%d\n",
 	  prefix, this,  this->path, this->link,
 	  this->mfd, this->sfd, this->ifd, this->rbytes, this->wbytes,
 	  this->ccnt);
@@ -16,14 +16,14 @@ ttyDump(tty_t *this, FILE *f, char *prefix)
 extern bool
 ttyInit(tty_t *this, char *ttylink)
 {
-  this->path[0] =  0;
-  this->link    =  ttylink;
-  this->rbytes  =  0;
-  this->wbytes  =  0;
-  this->mfd     = -1;
-  this->sfd     = -1;
-  this->ifd     = -1;
-  this->ccnt    =  0;
+  this->path[0]   =  0;
+  this->link      =  ttylink;
+  this->rbytes    =  0;
+  this->wbytes    =  0;
+  this->mfd       = -1;
+  this->sfd       = -1;
+  this->ifd       = -1;
+  this->ccnt      =  0;
   return true;
 }
 
@@ -31,7 +31,7 @@ extern bool
 ttyCreate(tty_t *this, bool raw)
 {
   int sfd;
-  VLPRINT(1, "this=0x%p\n", this);
+  VLPRINT(1, "this=%p\n", this);
 
   assert(this);
   assert(this->mfd == -1);
@@ -83,23 +83,58 @@ ttyCreate(tty_t *this, bool raw)
 }
 
 extern int
-ttyWriteChar(tty_t *this, char c)
+ttyWriteChar(tty_t *this, char c, struct timespec *ts)
 {
-  VLPRINT(2, "0x%p: %02x(%c)\n", this, c, c);
+  
   int n = write(this->mfd, &c, 1);
-  if (n==1) this->wbytes++;  else VLPRINT(2, "write failed?? %d\n", n);
+  if (n==1) {
+    if (ts) {
+      if (clock_gettime(CLOCK_SOURCE, ts) == -1) {
+	perror("clock_gettime");
+	NYI;
+      }
+    }
+    this->wbytes++;
+    if (verbose(2)) {
+      asciistr_t charstr;
+      ascii_char2str((int)c, charstr);
+      VPRINT("  %p:%s(%s): %02x(%s)", this, this->path, this->link, c, charstr);
+      if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
+      else fprintf(stderr, "\n");
+    }
+  } else VLPRINT(2, "write failed?? %d\n", n);
   return n;
 }
 
 extern int
-ttyReadChar(tty_t *this, char *c)
+ttyReadChar(tty_t *this, char *c, struct timespec *ts, double delay)
 {
+  struct timespec now;
+  if (clock_gettime(CLOCK_SOURCE, &now) == -1) {
+    perror("clock_gettime");
+    NYI;
+  }
+  if (ts && (delay > 0.0)) {
+    double diff;
+    diff = (now.tv_sec - ts->tv_sec) + 
+      (now.tv_nsec - ts->tv_nsec) / (double)NSEC_IN_SECOND;
+    if (diff < delay) {
+      this->delaycnt++;
+      return 0;
+    }
+  }
   int n = read(this->mfd, c, 1);
+  
   if (n==1) {
-    VLPRINT(2, "0x%p: %02x(%c)\n", this, *c, *c);
+    if (verbose(3)) {
+	asciistr_t charstr;
+	ascii_char2str((int)(*c), charstr);
+	VPRINT("  %p:%s(%s) %02x(%s)\n", this, this->path,
+	       this->link, *c, charstr);
+      }
     this->rbytes++;
   } else {
-    VLPRINT(2, "read failed?? %d\n", n);
+    VLPRINT(2, "  read failed?? %d\n", n);
   }
   return n;
 }
@@ -108,7 +143,7 @@ extern bool
 ttyCleanup(tty_t *this)
 {
   assert(this);
-  VLPRINT(1, "closing: 0x%p\n", this);
+  VLPRINT(1, "closing: %p\n", this);
   if (verbose(1)) {
     ttyDump(this, stderr, NULL);
   }

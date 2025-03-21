@@ -16,7 +16,7 @@
 #include <sys/sem.h>
 #include <fcntl.h>
 #include <unistd.h>
-
+#include <time.h>
 
 //#define ASSERTS_OFF
 //#define VERBOSE_CHECKS_OFF
@@ -26,6 +26,12 @@
 #else
 #define ASSERT(...) assert(__VA_ARGS__)
 #endif
+
+#define NSEC_IN_SECOND 1000000000
+#define CMD_BUFSIZE 4096
+#define TTY_MAX_PATH 256
+#define DEFAULT_CMD_DELAY 0.0
+#define CLOCK_SOURCE CLOCK_MONOTONIC
 
 typedef enum {
   EVNT_HDLR_SUCCESS=0,
@@ -37,13 +43,12 @@ typedef struct {
   void *obj;
 } evntdesc_t;
 
-#define CMD_BUFSIZE 4096
-#define TTY_MAX_PATH 256
 typedef struct {
   char      path[TTY_MAX_PATH];// tty path (slave)
   char     *link;              // link path to tty path
   uint64_t  rbytes;            // number of bytes read from tty
   uint64_t  wbytes;            // number of bytes written to tty
+  uint64_t  delaycnt;          // number of times we delayed reading tty
   int       mfd;               // fd used to communicate with tty (master)
   int       sfd;               // fd used to hold a reference to the slave
                                // tty if we want to keep it alive
@@ -59,6 +64,7 @@ typedef struct  {
   evntdesc_t pidfded;         // pidfd event descriptor;
   evntdesc_t cmdttyed;        // cmdtty event descriptor;
   evntdesc_t cltttyed;        // clttty event descriptor;
+  struct timespec lastwrite;  // timestamp of last write
   char   *name;               // user defined name (link is by default name)
   char   *cmdline;            // shell command line of command  
   char   *log;                // path to log (copy of all data written and read)
@@ -72,7 +78,14 @@ typedef struct  {
 
 typedef struct {
   cmd_t *cmds;                // hashtable of cmds
-  tty_t  btty;                // broadcast tty 
+  cmd_t *slowestcmd;          // pointer to the slowest cmd so that we can pace
+                              // broadcast tty reads based on this command
+                              // this approach avoids us having to implement
+                              // our own write buffering to delay writes
+                              // rather we pace reads and let the data
+                              // buffer in the kernel tty port 
+  tty_t  btty;                // broadcast tty
+  double defaultcmddelay;     // default value for sending data to commands
   int    verbose;             // verbosity level 
 } globals_t;
 
@@ -83,6 +96,41 @@ extern void cleanup();
 static inline void EEXIT() {
   cleanup();
   exit(EXIT_FAILURE);
+}
+
+// true if in ascii range
+__attribute__((unused)) static bool
+ascii_isvalid(int c) { return (c>=0 && c<=127); }
+
+// returns true if printable false if not
+__attribute__((unused)) static bool
+ascii_isprintable(int c) { return ( (c>=' ' && c<='~') ||
+					 (c=='\n' || c=='\r' || c=='\t') ); }
+
+typedef char asciistr_t[4];
+extern asciistr_t ascii_nonprintable[32];
+
+// ascii character to string
+// if in ascii range return true and set first four values of str to string
+// encoding of ascii value. 
+__attribute__((unused)) static bool
+ascii_char2str(int c, asciistr_t str)
+{
+  assert(str);
+  if (!ascii_isvalid(c)) {
+    str[0]=0;
+    return false;
+  }
+  if (c>=' ' && c<='~') {
+    str[0]=(char)c; str[1]=0; str[2]=0; str[3]=0;
+  } else {
+    assert(c>=0 && c<=(sizeof(ascii_nonprintable)/sizeof(asciistr_t)));
+    str[0]=ascii_nonprintable[c][0];
+    str[1]=ascii_nonprintable[c][1];
+    str[2]=ascii_nonprintable[c][2];
+    str[3]=ascii_nonprintable[c][3];
+  }
+  return true;
 }
 
 #define NYI { fprintf(stderr, "%s: %d: NYI\n", __func__, __LINE__); }

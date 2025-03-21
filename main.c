@@ -6,15 +6,16 @@
 #define DEFAULT_BTTY_LINK "btty"
 
 globals_t GBLS = {
-  .verbose = 0,
-  .cmds    = NULL
+  .slowestcmd = NULL,
+  .verbose    = 0,
+  .cmds       = NULL
 };
 
 static void
 usage(char *name)
 {
   fprintf(stderr,
-	  "USAGE: %s [-v] <name,pty,log,delay,cmd> [<name,pty,log,delay,cmd>]\n"
+	  "USAGE: %s [-v] [-b broadcast tty link path] [-d <default read delay sec>] <name,pty,log,delay,cmd> [<name,pty,log,delay,cmd>]\n"
 	  " Yet Another Relay\n",
 	  name);
 }
@@ -23,6 +24,7 @@ static void
 GBLSDump(FILE *f)
 {
   fprintf(f, "GBLS.verbose=%d\n", GBLS.verbose);
+  fprintf(f, "GBLS.defaultcmddelay=%f\n", GBLS.defaultcmddelay);
   ttyDump(&GBLS.btty, stderr, "GBLS.btty: ");
   fprintf(f, "GBLS.cmds:");
   {
@@ -31,6 +33,9 @@ GBLSDump(FILE *f)
 	cmdDump(cmd, stderr, "\n  ");
       }
   }
+  fprintf(f, "GBLS.slowestcmd=%p", GBLS.slowestcmd);
+  if (GBLS.slowestcmd) fprintf(f, "(%s)\n", GBLS.slowestcmd->name);
+  else fprintf(f, "\n");
 }
 
 static bool
@@ -83,8 +88,7 @@ cmdstrParse(char *cmdstr, char **name, char **cmdline,
     goto done;
   }
   if (*nptr==0) { // none specified
-    // change log to NULL
-    *delay   = 0.0;
+     *delay = GBLS.defaultcmddelay;
   } else {
     errno = 0;
     *delay = strtod(nptr, NULL);
@@ -122,7 +126,7 @@ GBLSAddCmd(char *cmdstr)
     // new command
     cmd=malloc(sizeof(cmd_t));
     if (!cmdInit(cmd, name, cmdline, delay, ttylink, log)) {
-      EPRINT("Failed to initCmd(0x%p,%s,%s,%f,%s,%s)", cmd, name, cmdline,
+      EPRINT("Failed to initCmd(%p,%s,%s,%f,%s,%s)", cmd, name, cmdline,
 	     delay, ttylink, log);
       free(cmd);
       return false;
@@ -132,6 +136,11 @@ GBLSAddCmd(char *cmdstr)
       cmdCleanup(cmd);
       free(cmd);
       return false;
+    }
+    if (GBLS.slowestcmd) {
+      if (delay > GBLS.slowestcmd->delay) GBLS.slowestcmd = cmd;
+    } else {
+      GBLS.slowestcmd = cmd;
     }
     HASH_ADD_KEYPTR(hh, GBLS.cmds, cmd->name, strlen(cmd->name), cmd);
   } else {
@@ -150,6 +159,10 @@ GBLSCmdsWriteChar(char c)
   cmd_t *cmd, *tmp;
   HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
     n=cmdWriteChar(cmd, c);
+    if ( n != 1 ) {
+      EPRINT("  write returned: n=%d\n", n);
+      NYI;
+    }
     if (n) cnt++;
   }
   return cnt;
@@ -160,12 +173,20 @@ argsParse(int argc, char **argv)
 {
     char opt;
     
-    while ((opt = getopt(argc, argv, "b:hv")) != -1) {
+    while ((opt = getopt(argc, argv, "b:d:hv")) != -1) {
     switch (opt) {
     case 'b':
       GBLS.btty.link=optarg;
       break;
-    case 'h':
+    case 'd':
+      errno = 0;
+      GBLS.defaultcmddelay = strtod(optarg, NULL);
+      if (errno != 0) {
+	perror("bad delay value");
+	return  false;
+      }
+      break;
+     case 'h':
       usage(argv[0]);
       return false;
     case 'v':
@@ -196,6 +217,25 @@ argsParse(int argc, char **argv)
   return true;
 }
 
+#if 0 
+extern void
+delaysec(double delay)
+{
+  struct timespec thedelay     = { .tv_sec = 0, .tv_nsec = 0 };
+  struct timespec ndelay       = { .tv_sec = 0, .tv_nsec = 0 };
+  struct timespec nrem         = { .tv_sec = 0, .tv_nsec = 0 };
+  if (delay >= 1.0) {
+    thedelay.tv_sec = (time_t)delay;
+    delay = delay - thedelay.tv_sec;
+  }
+  thedelay.tv_nsec = delay * (double)NSEC_IN_SECOND;
+  ndelay = thedelay; 
+  while (nanosleep(&ndelay,&nrem)<0) {
+      ndelay = nrem;
+  }
+}
+#endif
+
 extern void
 fdSetnonblocking(int fd)
 {
@@ -208,19 +248,32 @@ fdSetnonblocking(int fd)
 }
 
 evnthdlrrc_t
-bcastfdEventHandler(void *obj, uint32_t evnts, int epollfd)
+bcsttyEvent(void *obj, uint32_t evnts, int epollfd)
 {
+  tty_t *tty = obj;
+  int     fd = tty->mfd;
   assert(obj == &GBLS.btty);
-  VLPRINT(2, "btty FD  evnts:%08x", evnts);
+  VLPRINT(3,"START: BCSTTY: tty(%p):%s(%s) fd:%d evnts:0x%08x\n", tty, 
+	  tty->link, tty->path, fd, evnts);
   if (evnts & EPOLLIN) {
-    VLPRINT(2,"EPOLLIN(%x)\n", EPOLLIN);
     char c;
-    int n = ttyReadChar(&GBLS.btty, &c);
-    if (verbose(2)) {
-      if (n) fprintf(stderr, "btty: %c(%02x)\n", c, c);
-      else fprintf(stderr, "bgtty: n=%d\n", n);
+    // pretend we are reading characters for the slowest command
+    VLPRINT(3, "btty(%p)\n", obj);
+    int n = ttyReadChar(&GBLS.btty, &c,
+			&(GBLS.slowestcmd->lastwrite),
+			GBLS.slowestcmd->delay);
+    if (n) {
+      if (verbose(2)) {
+	asciistr_t charstr;
+	ascii_char2str((int)c, charstr);
+	VPRINT("---> BCSTTY: START: EIN: tty(%p):%s(%s) fd:%d evnts:0x%08x n:%d:"
+	      " %02x(%s)\n", tty, tty->link, tty->path, fd, evnts, n, c,
+	       charstr);
+      }
+      n=GBLSCmdsWriteChar(c);
+      VLPRINT(2, "<---  BCSTTY: END: EIN: tty(%p):%s(%s) fd:%d evnts:0x%08x n=%d\n",
+	      tty, tty->link, tty->path, fd, evnts, n);
     }
-    GBLSCmdsWriteChar(c);
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
   }
@@ -243,6 +296,8 @@ bcastfdEventHandler(void *obj, uint32_t evnts, int epollfd)
     VLPRINT(2,"unknown events evnts:%x", evnts);
   }
  done:
+  VLPRINT(3, "END : BCSTTY: tty(%p):%s(%s) fd:%d evnts:0x%08x\n",
+	      tty, tty->link, tty->path, fd, evnts);
   return EVNT_HDLR_SUCCESS;
 }
 
@@ -265,7 +320,7 @@ theLoop()
   }
   // register broadcast pty poll set 
   {
-    evntdesc_t bttyfded = { .hdlr=bcastfdEventHandler, &GBLS.btty }; 
+    evntdesc_t bttyfded = { .hdlr=bcsttyEvent, &GBLS.btty }; 
     // we use non blocking reads and watch for EAGAIN on writes
     // to see when we have exhausted the kernel tty port buffer
     fdSetnonblocking(GBLS.btty.mfd);
@@ -319,18 +374,18 @@ theLoop()
       evntdesc_t *ed = events[n].data.ptr;
       uint32_t evnts = events[n].events;
       assert(ed);
-      VLPRINT(2, "%d/%d: ed: 0x%p (.hdlr=0x%p .obj=Ox%p) evnts:0x%08x\n",
+      VLPRINT(3, "%d/%d: ed:%p (.hdlr=0x%p .obj=Ox%p) evnts:0x%08x\n",
 	      n, nfds, ed, ed->hdlr, ed->obj, evnts);
       assert(ed->hdlr);
       // call handler registered for this event source 
       erc = ed->hdlr(ed->obj, evnts, epollfd);
       if (erc == EVNT_HDLR_EXIT_LOOP) {
 	VLPRINT(1, "eventhandler returned exiting loop rc"
-		" hdlr:0x%p obj:0x%p evnts:%08x\n", ed->hdlr, ed->obj, evnts);
+		" hdlr:%p obj:0x%p evnts:%08x\n", ed->hdlr, ed->obj, evnts);
 	rc = true;
 	goto done;
       } else if (erc == EVNT_HDLR_FAILED) {
-	EPRINT("event handler failed hdlr:0x%p obj:0x%p evnts:%08x\n",
+	EPRINT("event handler failed hdlr:%p obj:0x%p evnts:%08x\n",
 	       ed->hdlr, ed->obj, evnts);
 	rc = false;
 	goto done;
@@ -370,6 +425,8 @@ int main(int argc, char **argv)
 {
   // initialize all global data structures to ensure
   // correct cleanup behavior incase of early termination
+  // the read delay of the broadcast tty will be set to the
+  // largest delay of any of the commands
   if (!ttyInit(&GBLS.btty, DEFAULT_BTTY_LINK)) EEXIT();
   
   atexit(cleanup);
@@ -385,3 +442,12 @@ int main(int argc, char **argv)
   
   return EXIT_SUCCESS;
 }
+
+asciistr_t ascii_nonprintable[32] = {
+  [0] = "0", [1] = "SOH", [2] = "STX", [3] = "ETX", [4] = "EOT", [5] = "ENQ",
+  [06] = "ACK", [7] = "\\a", [8] = "\b", [9] = "\\t", [10] = "\\n", [11] = "\\v",
+  [12] = "\\f", [13] = "\\r", [14] = "SO", [15] = "SI", [16] = "DLE",
+  [17] = "DC1", [18] = "DC2", [19] = "DC3", [20] = "DC4", [21] = "NAK",
+  [22] = "SYN", [23] = "ETB", [24] = "CAN", [25] = "EM", [26] = "SUB",
+  [27] = "ESC", [28] = "FS", [29] = "GS", [30] = "RS", [31] = "US"
+};

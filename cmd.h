@@ -10,7 +10,7 @@ extern bool cmdCleanup(cmd_t *this);
 __attribute__((unused)) static int 
 cmdWriteChar(cmd_t *this, char c)
 {
-  return ttyWriteChar(&(this->cmdtty), c);
+  return ttyWriteChar(&(this->cmdtty), c, &(this->lastwrite));
 }
 
 #endif
