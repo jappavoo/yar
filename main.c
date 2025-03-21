@@ -266,12 +266,13 @@ bcsttyEvent(void *obj, uint32_t evnts, int epollfd)
       if (verbose(2)) {
 	asciistr_t charstr;
 	ascii_char2str((int)c, charstr);
-	VPRINT("---> BCSTTY: START: EIN: tty(%p):%s(%s) fd:%d evnts:0x%08x n:%d:"
-	      " %02x(%s)\n", tty, tty->link, tty->path, fd, evnts, n, c,
-	       charstr);
+	VPRINT("---> BCSTTY: START: EIN: tty(%p):%s(%s) fd:%d evnts:0x%08x\n"
+	       "ttyReadChar:    %p:%s(%s) fd:%d n:%d: %02x(%s)\n",
+	       tty, tty->link, tty->path, fd, evnts,
+	       tty, tty->link, tty->path, fd, n, c, charstr);
       }
       n=GBLSCmdsWriteChar(c);
-      VLPRINT(2, "<---  BCSTTY: END: EIN: tty(%p):%s(%s) fd:%d evnts:0x%08x n=%d\n",
+      VLPRINT(2, "<--- BCSTTY: END: EIN: tty(%p):%s(%s) fd:%d evnts:0x%08x n=%d\n",
 	      tty, tty->link, tty->path, fd, evnts, n);
     }
     evnts = evnts & ~EPOLLIN;

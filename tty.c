@@ -98,7 +98,8 @@ ttyWriteChar(tty_t *this, char c, struct timespec *ts)
     if (verbose(2)) {
       asciistr_t charstr;
       ascii_char2str((int)c, charstr);
-      VPRINT("  %p:%s(%s): %02x(%s)", this, this->path, this->link, c, charstr);
+      VPRINT("  %p:%s(%s): fd:%d c:%02x(%s)", this, this->link, this->path,
+	     this->mfd, c, charstr);
       if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
       else fprintf(stderr, "\n");
     }
@@ -129,8 +130,8 @@ ttyReadChar(tty_t *this, char *c, struct timespec *ts, double delay)
     if (verbose(3)) {
 	asciistr_t charstr;
 	ascii_char2str((int)(*c), charstr);
-	VPRINT("  %p:%s(%s) %02x(%s)\n", this, this->path,
-	       this->link, *c, charstr);
+	VPRINT("  %p:%s(%s) fd:%d c:%02x(%s)\n", this, this->link,
+	       this->path, this->mfd, *c, charstr);
       }
     this->rbytes++;
   } else {

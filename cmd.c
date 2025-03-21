@@ -97,9 +97,11 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
       asciistr_t charstr;
       ascii_char2str(c, charstr);
       fprintf(stderr,"cmdttyEvent: ---> CMDTTY: START: EIN: tty(%p):%s(%s) fd:%d"
-		 " evnts:0x%08x cmd:%p(%s) n:%d: "
-	      "%02x(%s)\n", tty, tty->link, tty->path, fd, evnts, this,
-	      this->name, n, c, charstr);
+		 " evnts:0x%08x cmd:%p(%s)\n"
+	      "ttyReadChar:    %p:%s(%s) fd:%d c:%02x(%s) n:%d\n",
+	      tty, tty->link, tty->path, fd,
+	      evnts, this, this->name,
+	      tty, tty->link, tty->path, fd, c, charstr, n);
       
     }
     int i        = cmdbufNtoI(this->n);    // account for circular buffer
@@ -110,7 +112,7 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
     n += ttyWriteChar(&GBLS.btty, c, NULL);       // send data to broadcast tty
     if (n != 2) NYI;
     if (evnts && verbose(2)) {
-      fprintf(stderr, "cmdttyEvent: <---  CMDTTY: END: EIN: tty(%p):%s(%s) fd:%d"
+      fprintf(stderr, "cmdttyEvent: <--- CMDTTY: END: EIN: tty(%p):%s(%s) fd:%d"
 	     " evnts:0x%08x n:%d cmd:%p(%s)\n",
 	     tty, tty->link, tty->path, fd, evnts, n, this, this->name);      
     }
@@ -255,9 +257,10 @@ cltttyEvent(void *obj, uint32_t evnts, int epollfd)
 	  asciistr_t charstr;
 	  ascii_char2str((int)c, charstr);
 	  VPRINT("---> CLTTTY: START: EIN: tty(%p):%s(%s) fd:%d"
-		 " evnts:0x%08x cmd:%p(%s) n:%d:"
-		 "%02x(%s)\n", tty, tty->link, tty->path, fd, evnts, this,
-		 this->name, n, c, charstr);
+		 " evnts:0x%08x cmd:%p(%s)\n"
+		 "ttyReadChar:    %p:%s(%s) fd:%d c:%02x(%s) n:%d\n",
+		 tty, tty->link, tty->path, fd, evnts, this,
+		 this->name, tty, tty->link, tty->path, fd, c, charstr, n);
 	}
       n=cmdWriteChar(this,c);
       if ( n != 1 ) {
