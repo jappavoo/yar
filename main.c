@@ -272,8 +272,8 @@ bcsttyEvent(void *obj, uint32_t evnts, int epollfd)
 	       tty, tty->link, tty->path, fd, n, c, charstr);
       }
       n=GBLSCmdsWriteChar(c);
-      VLPRINT(2, "<--- BCSTTY: END: EIN: tty(%p):%s(%s) fd:%d evnts:0x%08x n=%d\n",
-	      tty, tty->link, tty->path, fd, evnts, n);
+      VLPRINT(2, "<--- BCSTTY: END: EIN: tty(%p):%s(%s) fd:%d evnts:0x%08x "
+	      "n=%d\n", tty, tty->link, tty->path, fd, evnts, n);
     }
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
@@ -445,8 +445,8 @@ int main(int argc, char **argv)
 }
 
 asciistr_t ascii_nonprintable[32] = {
-  [0] = "0", [1] = "SOH", [2] = "STX", [3] = "ETX", [4] = "EOT", [5] = "ENQ",
-  [06] = "ACK", [7] = "\\a", [8] = "\b", [9] = "\\t", [10] = "\\n", [11] = "\\v",
+  [0] = "NUL", [1] = "SOH", [2] = "STX", [3] = "ETX", [4] = "EOT", [5] = "ENQ",
+  [06] = "ACK", [7] = "\\a", [8] = "\\b", [9] = "\\t", [10] = "\\n", [11] = "\\v",
   [12] = "\\f", [13] = "\\r", [14] = "SO", [15] = "SI", [16] = "DLE",
   [17] = "DC1", [18] = "DC2", [19] = "DC3", [20] = "DC4", [21] = "NAK",
   [22] = "SYN", [23] = "ETB", [24] = "CAN", [25] = "EM", [26] = "SUB",

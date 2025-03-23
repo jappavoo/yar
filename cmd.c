@@ -98,10 +98,12 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
       ascii_char2str(c, charstr);
       fprintf(stderr,"cmdttyEvent: ---> CMDTTY: START: EIN: tty(%p):%s(%s) fd:%d"
 		 " evnts:0x%08x cmd:%p(%s)\n"
-	      "ttyReadChar:    %p:%s(%s) fd:%d c:%02x(%s) n:%d\n",
+	      "ttyReadChar:    %p:%s(%s) fd:%d c:%02x(%s) %s n:%d\n",
 	      tty, tty->link, tty->path, fd,
 	      evnts, this, this->name,
-	      tty, tty->link, tty->path, fd, c, charstr, n);
+	      tty, tty->link, tty->path, fd, c, charstr,
+	      (ascii_isprintable(c)) ? "" : "^^^^ NOT PRINTABLE ^^^^",
+	      n);
       
     }
     int i        = cmdbufNtoI(this->n);    // account for circular buffer
@@ -258,9 +260,11 @@ cltttyEvent(void *obj, uint32_t evnts, int epollfd)
 	  ascii_char2str((int)c, charstr);
 	  VPRINT("---> CLTTTY: START: EIN: tty(%p):%s(%s) fd:%d"
 		 " evnts:0x%08x cmd:%p(%s)\n"
-		 "ttyReadChar:    %p:%s(%s) fd:%d c:%02x(%s) n:%d\n",
+		 "ttyReadChar:    %p:%s(%s) fd:%d c:%02x(%s) %s n:%d\n",
 		 tty, tty->link, tty->path, fd, evnts, this,
-		 this->name, tty, tty->link, tty->path, fd, c, charstr, n);
+		 this->name, tty, tty->link, tty->path, fd, c, charstr,
+		 (ascii_isprintable(c)) ? "" : "^^^^ NOT PRINTABLE ^^^^",
+		 n);
 	}
       n=cmdWriteChar(this,c);
       if ( n != 1 ) {

@@ -98,8 +98,9 @@ ttyWriteChar(tty_t *this, char c, struct timespec *ts)
     if (verbose(2)) {
       asciistr_t charstr;
       ascii_char2str((int)c, charstr);
-      VPRINT("  %p:%s(%s): fd:%d c:%02x(%s)", this, this->link, this->path,
-	     this->mfd, c, charstr);
+      VPRINT("  %p:%s(%s): fd:%d c:%02x(%s) %s", this, this->link, this->path,
+	     this->mfd, c, charstr,
+	     (ascii_isprintable(c)) ? "" : "^^^^ NOT PRINTABLE ^^^^");
       if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
       else fprintf(stderr, "\n");
     }

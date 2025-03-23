@@ -124,11 +124,17 @@ ascii_char2str(int c, asciistr_t str)
   if (c>=' ' && c<='~') {
     str[0]=(char)c; str[1]=0; str[2]=0; str[3]=0;
   } else {
-    assert(c>=0 && c<=(sizeof(ascii_nonprintable)/sizeof(asciistr_t)));
-    str[0]=ascii_nonprintable[c][0];
-    str[1]=ascii_nonprintable[c][1];
-    str[2]=ascii_nonprintable[c][2];
-    str[3]=ascii_nonprintable[c][3];
+    if (c == 127) {
+      // handle del 127 as a special case 
+      str[0]='D'; str[1]='E'; str[2]='L'; str[3]=0;
+    } else {
+      // rest of non-printable ascii are densely packed and can be looked up
+      assert(c>=0 && c<=(sizeof(ascii_nonprintable)/sizeof(asciistr_t)));
+      str[0]=ascii_nonprintable[c][0];
+      str[1]=ascii_nonprintable[c][1];
+      str[2]=ascii_nonprintable[c][2];
+      str[3]=ascii_nonprintable[c][3];
+    }
   }
   return true;
 }
