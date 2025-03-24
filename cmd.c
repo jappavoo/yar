@@ -21,7 +21,6 @@
 // location of last character OF accounting for buffer wrapping
 #define cmdbufDataEnd(n)   ( cmdbufWrapped(n) ? cmdbufNtoI(n)-1 : n-1 )
 
-
 extern bool
 cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
 	char *log)
@@ -411,4 +410,3 @@ cmdCleanup(cmd_t *this)
   }
   return true;
 }
-
