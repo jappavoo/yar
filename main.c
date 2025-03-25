@@ -171,7 +171,7 @@ GBLSCmdsWriteChar(char c)
 static bool
 argsParse(int argc, char **argv)
 {
-    char opt;
+    int opt;
     
     while ((opt = getopt(argc, argv, "b:d:hv")) != -1) {
     switch (opt) {
