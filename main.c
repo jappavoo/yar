@@ -241,10 +241,11 @@ fdSetnonblocking(int fd)
 {
   int flags;
   
-  flags = fcntl(fd, F_GETFD);
+  flags = fcntl(fd, F_GETFL);
   assert(flags!=-1);
   flags |= O_NONBLOCK;
-  flags = fcntl(fd, F_SETFD);  
+  flags = fcntl(fd, F_SETFL, flags);
+  assert(flags!=-1);
 }
 
 evnthdlrrc_t
@@ -322,9 +323,6 @@ theLoop()
   // register broadcast pty poll set 
   {
     evntdesc_t bttyfded = { .hdlr=bcsttyEvent, &GBLS.btty }; 
-    // we use non blocking reads and watch for EAGAIN on writes
-    // to see when we have exhausted the kernel tty port buffer
-    fdSetnonblocking(GBLS.btty.mfd);
     ev.data.ptr = &bttyfded;
     // edge triggered
     ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR; // | EPOLLET;

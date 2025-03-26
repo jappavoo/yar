@@ -53,7 +53,8 @@ typedef struct {
   int       sfd;               // fd used to hold a reference to the slave
                                // tty if we want to keep it alive
   int       ifd;               // inotifyfd
-  int       ccnt;              // count of active clients (current opens of tty)
+  int       opens;             // count current opens of tty
+  int       readers;           // count of readers (opens that have done a read)
 } tty_t;
 
 typedef struct  {
@@ -139,7 +140,9 @@ ascii_char2str(int c, asciistr_t str)
   return true;
 }
 
-#define NYI { fprintf(stderr, "%s: %d: NYI\n", __func__, __LINE__); }
+extern void fdSetnonblocking(int fd);
+
+#define NYI { fprintf(stderr, "%s: %d: NYI\n", __func__, __LINE__); assert(0); }
 
 #ifdef VERBOSE_CHECKS_OFF
 static inline bool verbose(int l) { return 0; }

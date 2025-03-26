@@ -7,10 +7,10 @@ ttyDump(tty_t *this, FILE *f, char *prefix)
 {
   fprintf(f, "%stty: this=%p path=%s link=%s \n"
              "       mfd=%d sfd=%d ifd=%d\n"
-	  "       rbytes=%lu wbytes=%lu ccnt=%d\n",
+	  "       rbytes=%lu wbytes=%lu opens=%d readers=%d\n",
 	  prefix, this,  this->path, this->link,
 	  this->mfd, this->sfd, this->ifd, this->rbytes, this->wbytes,
-	  this->ccnt);
+	  this->opens, this->readers);
 }
 
 extern bool
@@ -23,7 +23,8 @@ ttyInit(tty_t *this, char *ttylink)
   this->mfd       = -1;
   this->sfd       = -1;
   this->ifd       = -1;
-  this->ccnt      =  0;
+  this->opens     =  0;
+  this->readers   =  0;
   return true;
 }
 
@@ -47,6 +48,10 @@ ttyCreate(tty_t *this, bool raw)
     return false;
   }
   fcntl(this->mfd, F_SETFD, FD_CLOEXEC);
+
+  // we use non blocking reads and watch for EAGAIN on writes
+  // to see when we have exhausted the kernel tty port buffer
+  fdSetnonblocking(this->mfd);
   
   // we open the slave side and keep it open to ensure
   // that if out clients come and got via opens and close
@@ -73,10 +78,11 @@ ttyCreate(tty_t *this, bool raw)
     }
   }
 
-  this->sfd    = sfd;
-  this->rbytes = 0;
-  this->wbytes = 0;
-  this->ccnt   = 0;
+  this->sfd     = sfd;
+  this->rbytes  = 0;
+  this->wbytes  = 0;
+  this->opens   = 0;
+  this->readers = 0;
   
   if (verbose(1)) ttyDump(this, stderr, "  Created ");
   return true;
@@ -85,9 +91,33 @@ ttyCreate(tty_t *this, bool raw)
 extern int
 ttyWriteChar(tty_t *this, char c, struct timespec *ts)
 {
-  
-  int n = write(this->mfd, &c, 1);
-  if (n==1) {
+  int n=0;
+ retry:
+  n = write(this->mfd, &c, 1);
+  if (n==-1) {
+    if (errno==EAGAIN) {
+      if (this->readers==0) {
+	// FIXME: JA think about race conditions with a new reader
+	//        starting when the port buffer is full
+	// we have no readers
+	int sqc = ttySlaveInQCnt(this);
+	ttySlaveFlush(this);
+	VLPRINT(1, "write to %s(%s) failed with %d opens %d readers:"
+		" FLUSHED: %d bytes\n",
+		this->link, this->path, this->opens, this->readers, sqc);
+	n = write(this->mfd, &c, 1);
+	goto retry;
+      } else {
+	EPRINT("failed to write data to %s(%s) with %d opens and %d readers\n"
+	       "IMPLEMENT FLOW CONTROL: hang on to failed character & retry\n",
+	       this->link, this->path, this->opens, this->readers);
+	NYI;
+      }
+    } else {
+      perror("ttyWriteChar write failed");
+      NYI;
+    }
+  } else if (n==1) {
     if (ts) {
       if (clock_gettime(CLOCK_SOURCE, ts) == -1) {
 	perror("clock_gettime");
@@ -104,8 +134,21 @@ ttyWriteChar(tty_t *this, char c, struct timespec *ts)
       if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
       else fprintf(stderr, "\n");
     }
-  } else VLPRINT(2, "write failed?? %d\n", n);
+  } else {
+    // n==0
+    EPRINT("write returned unexpected value?? n=%d\n", n);
+    NYI;
+  }
   return n;
+}
+
+extern void
+ttyPortSpace(tty_t *this, int *min, int *mout, int *sin, int *sout)
+{
+  assert(ioctl(this->mfd, TIOCINQ, min)==0);
+  assert(ioctl(this->mfd, TIOCOUTQ, mout)==0);
+  assert(ioctl(this->sfd, TIOCINQ, sin)==0);
+  assert(ioctl(this->sfd, TIOCOUTQ, sout)==0);
 }
 
 extern int
@@ -164,7 +207,8 @@ ttyCleanup(tty_t *this)
   this->path[0] =  0;
   this->rbytes  =  0;
   this->wbytes  =  0;
-  this->ccnt    =  0;
+  this->readers =  0;
+  this->opens   =  0;
 
   return true;
 }

@@ -87,7 +87,9 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
   char c;
   tty_t *tty = &(this->cmdtty);
   int fd = tty->mfd;
-  int n  = ttyReadChar(tty, &c, NULL, 0);
+  int n;
+  
+  n  = ttyReadChar(tty, &c, NULL, 0);
   if (n==0) {
     VLPRINT(2, "%p: read returned 0\n", this);
     NYI;
@@ -109,7 +111,9 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
     this->buf[i] = c;                      // store character in buffer
     this->n++;                             // inc n -- bytes since last flush        
     n = ttyWriteChar(&(this->clttty), c, NULL);  // send data to our client tty
-    if (n != 1) NYI;
+    if (n != 1) {
+      NYI;
+    }
     n += ttyWriteChar(&GBLS.btty, c, NULL);       // send data to broadcast tty
     if (n != 2) NYI;
     if (evnts && verbose(2)) {
@@ -331,6 +335,7 @@ cmdCreate(cmd_t *this, bool raw)
       return false;
     }
     fcntl(this->cmdtty.mfd, F_SETFD, FD_CLOEXEC);
+    //    fdSetnonblocking(this->cmdtty.mfd);
   }
 
   // Child: Run the command line in the new process
@@ -356,11 +361,14 @@ cmdCreate(cmd_t *this, bool raw)
   // Parent: finish setup the command object for the newly created
   // child
   {
-    this->pidfd         = pidfd_open(cpid, PIDFD_NONBLOCK);
+    this->pidfd          = pidfd_open(cpid, PIDFD_NONBLOCK);
     fcntl(this->pidfd, F_SETFD, FD_CLOEXEC);
-    this->pid           = cpid;
-    this->pidfded.hdlr  = cmdPidEvent;
-    this->pidfded.obj   = this;
+    this->pid            = cpid;
+    this->pidfded.hdlr   = cmdPidEvent;
+    this->pidfded.obj    = this;
+    this->cmdtty.opens   = 1;            // we force the open and readers counts 
+    this->cmdtty.readers = 1;            // to one to reflect the process that 
+                                         // cmd process 
     this->cmdttyed.hdlr = cmdttyEvent;
     this->cmdttyed.obj  = this;
     this->cltttyed.hdlr = cltttyEvent;
