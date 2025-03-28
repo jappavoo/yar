@@ -32,6 +32,7 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
       perror("read");
       NYI;
     }
+    ASSERT(iev.wd == this->iwd);
     ievents = iev.mask;
     switch (ievents) {
     case IN_OPEN:
@@ -113,27 +114,34 @@ ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid)
     perror("ptyfork");
     goto cleanup;
   }
+  // **** WARNING: RUNNING IN BOTH PARENT AND CHILD!!!!!
   fcntl(this->dfd, F_SETFD, FD_CLOEXEC);
-  // FIXME: JA: Not sure why this breaks thinks???
-  //    fdSetnonblocking(this->cmdtty.mfd);
 
-  // setup register for inotify events on the pts to track opens and closes 
-  this->ifd = inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
-  if (this->ifd == -1) {
-    perror("inotify_init1");
-    goto cleanup;
+  if (*cpid == 0) {
+    // CHILD: return immediately *cpid let's call know if they are
+    //        running in child or parent
+    return true;
+  } else {
+    // PARENT: finish setting up cmd object 
+    fdSetnonblocking(this->dfd);
+    
+    // setup register for inotify events on the pts to track opens and closes 
+    this->ifd = inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
+    if (this->ifd == -1) {
+      perror("inotify_init1");
+      goto cleanup;
+    }
+    this->iwd = inotify_add_watch(this->ifd, this->path, IN_OPEN | IN_CLOSE);
+    if (this->iwd == -1) {
+      perror("inotify_add_watch");
+      goto cleanup;
+    }
+    this->sfd   = -1;
+    this->dfded = ed;
+    this->ifded = (evntdesc_t){ .hdlr = ttyNotifyEvent, .obj = this };
+    if (verbose(1)) ttyDump(this, stderr, "  Created ");
+    return true;
   }
-  this->iwd = inotify_add_watch(this->ifd, this->path, IN_OPEN | IN_CLOSE);
-  if (this->iwd == -1) {
-    perror("inotify_add_watch");
-    goto cleanup;
-  }
-  
-  this->sfd   = -1;
-  this->dfded = ed;
-  this->ifded = (evntdesc_t){ .hdlr = ttyNotifyEvent, .obj = this };
-  if (verbose(1)) ttyDump(this, stderr, "  Created ");
-  return true;
  cleanup:
   ttyCleanup(this);
   return false;

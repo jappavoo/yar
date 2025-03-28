@@ -143,7 +143,7 @@ cmdCmdttyEvent(void *obj, uint32_t evnts, int epollfd)
 	    " cmd:%s(%p)\n", tty, tty->link, tty->path, fd, evnts,
 	  this->name, this);
   if (evnts & EPOLLIN) {
-    cmdttyBufOutput(this, evnts);    // date in on this fd is output from command
+    cmdttyBufOutput(this, evnts);    // data in on this fd is output from command
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
   }
@@ -322,12 +322,14 @@ cmdCreate(cmd_t *this, bool raw)
   ed = (evntdesc_t){ .obj = this, .hdlr = cmdCltttyEvent };
   if (!ttyCltttyCreate(&this->clttty, ed, true)) return false;
 
-  // Create tty that is connected to a new forked child process
+  // Create tty that is connected to a NEW forked child process
   ed = (evntdesc_t){ .obj = this, .hdlr = cmdCmdttyEvent };
   if (!ttyCmdttyForkCreate(&(this->cmdtty), ed, &cpid)) return false;
-
-  // Child: Run the command line in the new process
+  
+  // **** WARNING RUNNING IN BOTH PARENT AND CHILD
+  
   if (cpid==0) {
+    // CHILD: Run the command line in the new process
     if (raw) ttySetRaw(STDIN_FILENO, NULL);
     // from tlpi-dist/pty/script.c
     char *shell = getenv("SHELL");
@@ -341,16 +343,15 @@ cmdCreate(cmd_t *this, bool raw)
 	   this->cmdline,   // argv[2]
 	   (char *) NULL);  // argv[3] terminating null
     perror("execlp");
-    return false;
+    NYI;
+  } else {
+      // PARENT: finish setup the command object for the newly created child
+    this->pidfd        = pidfd_open(cpid, PIDFD_NONBLOCK);
+    fcntl(this->pidfd, F_SETFD, FD_CLOEXEC);
+    this->pid          = cpid;
+    this->pidfded      = (evntdesc_t){ .hdlr = cmdPidEvent, .obj = this };
+    return true;
   }
-  
-  // Parent: finish setup the command object for the newly created
-  // child
-  this->pidfd        = pidfd_open(cpid, PIDFD_NONBLOCK);
-  fcntl(this->pidfd, F_SETFD, FD_CLOEXEC);
-  this->pid          = cpid;
-  this->pidfded      = (evntdesc_t){ .hdlr = cmdPidEvent, .obj = this };
-  return true;
 }
 
 extern bool
