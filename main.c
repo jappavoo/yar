@@ -3,12 +3,13 @@
 #include <getopt.h>
 #include <signal.h>
 
-#define DEFAULT_BTTY_LINK "btty"
+#define DEFAULT_BCSTTTY_LINK "bcsttty"
 
 globals_t GBLS = {
-  .slowestcmd = NULL,
-  .verbose    = 0,
-  .cmds       = NULL
+  .slowestcmd      = NULL,
+  .verbose         = 0,
+  .cmds            = NULL,
+  .defaultcmddelay = 0.0
 };
 
 static void
@@ -25,7 +26,7 @@ GBLSDump(FILE *f)
 {
   fprintf(f, "GBLS.verbose=%d\n", GBLS.verbose);
   fprintf(f, "GBLS.defaultcmddelay=%f\n", GBLS.defaultcmddelay);
-  ttyDump(&GBLS.btty, stderr, "GBLS.btty: ");
+  ttyDump(&GBLS.bcsttty, stderr, "GBLS.bcsttty: ");
   fprintf(f, "GBLS.cmds:");
   {
       cmd_t *cmd, *tmp;
@@ -176,7 +177,7 @@ argsParse(int argc, char **argv)
     while ((opt = getopt(argc, argv, "b:d:hv")) != -1) {
     switch (opt) {
     case 'b':
-      GBLS.btty.link=optarg;
+      GBLS.bcsttty.link=optarg;
       break;
     case 'd':
       errno = 0;
@@ -249,18 +250,18 @@ fdSetnonblocking(int fd)
 }
 
 evnthdlrrc_t
-bcsttyEvent(void *obj, uint32_t evnts, int epollfd)
+bcstttyEvent(void *obj, uint32_t evnts, int epollfd)
 {
   tty_t *tty = obj;
-  int     fd = tty->mfd;
-  assert(obj == &GBLS.btty);
+  int     fd = tty->dfd;
+  assert(obj == &GBLS.bcsttty);
   VLPRINT(3,"START: BCSTTY: tty(%p):%s(%s) fd:%d evnts:0x%08x\n", tty, 
 	  tty->link, tty->path, fd, evnts);
   if (evnts & EPOLLIN) {
     char c;
     // pretend we are reading characters for the slowest command
-    VLPRINT(3, "btty(%p)\n", obj);
-    int n = ttyReadChar(&GBLS.btty, &c,
+    VLPRINT(3, "bcsttty(%p)\n", obj);
+    int n = ttyReadChar(&GBLS.bcsttty, &c,
 			&(GBLS.slowestcmd->lastwrite),
 			GBLS.slowestcmd->delay);
     if (n) {
@@ -310,9 +311,7 @@ theLoop()
 {
   bool rc;
   int epollfd;
-  struct epoll_event ev;
-
-  // create the kernel poll object
+  // create the kernel event poll object
   {
     epollfd = epoll_create1(EPOLL_CLOEXEC);
     if (epollfd == -1) {
@@ -320,45 +319,21 @@ theLoop()
       return false;
     }
   }
-  // register broadcast pty poll set 
-  {
-    evntdesc_t bttyfded = { .hdlr=bcsttyEvent, &GBLS.btty }; 
-    ev.data.ptr = &bttyfded;
-    // edge triggered
-    ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR; // | EPOLLET;
-    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, GBLS.btty.mfd, &ev) == -1 ) {
-      perror("epoll_ctl: GBLS.btty");
-      return false;
-    }
-  }
 
-  // register initial commands to the poll set
+  // register for the broadcast client interface events
+  ttyRegisterEvents(&(GBLS.bcsttty), epollfd);
+
+  // register for the events for all the initial commands
   {
     cmd_t *cmd, *tmp;
+    // iterate over the commmands in the commands hash table (created
+    // and stored in the hash table during command line arg procesing)
     HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-      ev.data.ptr = &cmd->pidfded;
-      // edge triggered
-      ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
-      if (epoll_ctl(epollfd, EPOLL_CTL_ADD, cmd->pidfd, &ev) == -1 ) {
-	perror("epoll_ctl: cmd->pidfd");
-	return false;
-      }
-      // level triggered 
-      ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR;
-      ev.data.ptr = &cmd->cmdttyed;
-      if (epoll_ctl(epollfd, EPOLL_CTL_ADD, cmd->cmdtty.mfd, &ev) == -1 ) {
-	perror("epoll_ctl: cmd->cmdtty.fd");
-	return false;
-      }
-      ev.data.ptr = &cmd->cltttyed;
-      if (epoll_ctl(epollfd, EPOLL_CTL_ADD, cmd->clttty.mfd, &ev) == -1 ) {
-	perror("epoll_ctl: cmd->clttty.mfd");
-	return false;
-      }
+      if (!cmdRegisterEvents(cmd, epollfd)) return false;
     }
   }
 
-  // detect and process events
+  // loop: detect events and dispatch handlers
   for (;;) {
     struct epoll_event events[MAX_EVENTS];
     int nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
@@ -401,7 +376,7 @@ extern
 void cleanup(void)
 {
   VPRINT("%s", "exiting\n");
-  ttyCleanup(&GBLS.btty);
+  ttyCleanup(&GBLS.bcsttty);
   {
     cmd_t *cmd, *tmp;
     HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
@@ -426,7 +401,7 @@ int main(int argc, char **argv)
   // correct cleanup behavior incase of early termination
   // the read delay of the broadcast tty will be set to the
   // largest delay of any of the commands
-  if (!ttyInit(&GBLS.btty, DEFAULT_BTTY_LINK)) EEXIT();
+  if (!ttyInit(&GBLS.bcsttty, DEFAULT_BCSTTTY_LINK)) EEXIT();
   
   atexit(cleanup);
   signal(SIGTERM, signalhandler);
@@ -435,8 +410,10 @@ int main(int argc, char **argv)
   if (!argsParse(argc, argv)) EEXIT();
 
   // create the broadcast tty
-  if (!ttyCreate(&GBLS.btty, true)) EEXIT();
-
+  {
+    evntdesc_t ed = { .obj = &(GBLS.bcsttty), .hdlr = bcstttyEvent };
+    if (!ttyCltttyCreate(&GBLS.bcsttty, ed, true)) EEXIT();
+  }
   if (!theLoop()) EEXIT();
   
   return EXIT_SUCCESS;

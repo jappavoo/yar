@@ -1,16 +1,16 @@
 #include "yar.h"
 #include <sys/syscall.h>
 #include <sys/pidfd.h>
-#include <pty/pty_fork.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <poll.h>
 #include <tty/tty_functions.h>
 #include <time.h>
 
-// Macros to help with circular cmdbuffer management --
+// MACROS to help with circular cmdbuffer management --
 //   This likely could be improved but wrote for comprehension not performance
 // Translate total a byte stream index into a fixed buffer sized offset
+
 #define cmdbufSize         ( sizeof(((cmd_t *)0)->buf) ) 
 #define cmdbufNtoI(n)      ( n %  cmdbufSize )
 #define cmdbufWrapped(n)   ( n >= cmdbufSize )
@@ -21,72 +21,13 @@
 // location of last character OF accounting for buffer wrapping
 #define cmdbufDataEnd(n)   ( cmdbufWrapped(n) ? cmdbufNtoI(n)-1 : n-1 )
 
-extern bool
-cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
-	char *log)
-{
-  assert(name && cmdline); 
-  this->name       = name;
-  this->cmdline    = cmdline;
-  this->delay      = delay;
-  this->log        = log;
-  this->n          = 0;
-  this->pid        = -1;
-  this->pidfd      = -1;
-  this->exitstatus = -1;
-  this->retry      = true;
-  this->lastwrite.tv_sec  = 0;
-  this->lastwrite.tv_nsec = 0;  
-  ttyInit(&(this->cmdtty), NULL);
-  ttyInit(&(this->clttty), ttylink);
-  return true;
-}
-
-extern bool
-cmdReset(cmd_t *this)
-{
-  // add code here
-  return false;
-}
-
-extern void
-cmdDump(cmd_t *this, FILE *f, char *prefix)
-{
-  assert(this);
-  int i=cmdbufNtoI(this->n);
-  int c=this->buf[i];
-  asciistr_t charstr = { 0,0,0,0 };
-  ascii_char2str(i, charstr);
-  
-  fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
-	  "    cmdline=\"%s\" \n    delay=%f log=%s n=%lu"
-	  " lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n", prefix, this,
-	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
-	  this->cmdline, this->delay, this->log, this->n,
-	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
-  
-  if (this->n) {
-    if (!cmdbufWrapped(this->n)) {
-      hexdump(f, this->buf, this->n);
-    } else {
-      // JA FIXME: this could probably be made to work for both cases but I 
-      // don't want to think about it 
-      size_t start = cmdbufDataStart(this->n);
-      char n = cmdbufSize - start; 
-      hexdump(f, &(this->buf[start]),  n);
-      hexdump(f, &(this->buf[0]), cmdbufSize - n);
-    }
-  }
-  ttyDump(&(this->cmdtty), f, "    cmdtty: ");
-  ttyDump(&(this->clttty), f, "    clttty: ");
-}
-
+// MISC
 static int
 cmdttyBufOutput(cmd_t *this, uint32_t evnts)
 {
   char c;
   tty_t *tty = &(this->cmdtty);
-  int fd = tty->mfd;
+  int fd = tty->dfd;
   int n;
   
   n  = ttyReadChar(tty, &c, NULL, 0);
@@ -109,12 +50,12 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
     }
     int i        = cmdbufNtoI(this->n);    // account for circular buffer
     this->buf[i] = c;                      // store character in buffer
-    this->n++;                             // inc n -- bytes since last flush        
+    this->n++;                             // inc n -- bytes since last flush
     n = ttyWriteChar(&(this->clttty), c, NULL);  // send data to our client tty
     if (n != 1) {
       NYI;
     }
-    n += ttyWriteChar(&GBLS.btty, c, NULL);       // send data to broadcast tty
+    n += ttyWriteChar(&GBLS.bcsttty, c, NULL);   // send data to broadcast tty
     if (n != 2) NYI;
     if (evnts && verbose(2)) {
       fprintf(stderr, "cmdttyEvent: <--- CMDTTY: END: EIN: tty(%p):%s(%s) fd:%d"
@@ -130,7 +71,7 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
   return n;
 }
 
-void
+static void
 cmdttyDrain(cmd_t *this)
 {
   // drain any remaining data???
@@ -140,8 +81,7 @@ cmdttyDrain(cmd_t *this)
 }
   
 // EVENT HANDLERS
-
-// pidfd event -- should only be POLLIN indicating death of the command process
+// pidfd event -- should only be POLLIN indicating death of the command pr
 static evnthdlrrc_t
 cmdPidEvent(void *obj, uint32_t evnts, int epollfd)
 {
@@ -166,7 +106,6 @@ cmdPidEvent(void *obj, uint32_t evnts, int epollfd)
       this->pidfd = -1;
     }
     cmdDump(this, stderr, "***Command Died:\n  ");
-    cmdReset(this);
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
   }
@@ -193,11 +132,13 @@ cmdPidEvent(void *obj, uint32_t evnts, int epollfd)
 // cmdtty event -- master side of command pty used to read and write data
 //                 to and from the command process and detect errors
 static evnthdlrrc_t
-cmdttyEvent(void *obj, uint32_t evnts, int epollfd)
+cmdCmdttyEvent(void *obj, uint32_t evnts, int epollfd)
 {
   cmd_t *this = obj;
   tty_t *tty = &(this->cmdtty);
-  int fd = tty->mfd;
+  int fd = tty->dfd;
+  
+  ASSERT(ttyIsCmdtty(tty));
   VLPRINT(3,"START: CMDTTY tty(%p):%s(%s) fd:%d evnts:0x%08x"
 	    " cmd:%s(%p)\n", tty, tty->link, tty->path, fd, evnts,
 	  this->name, this);
@@ -246,11 +187,13 @@ cmdttyEvent(void *obj, uint32_t evnts, int epollfd)
 // clttty event -- master side of client pty used by clients to read and
 //                 write data to and from the command 
 static evnthdlrrc_t
-cltttyEvent(void *obj, uint32_t evnts, int epollfd)
+cmdCltttyEvent(void *obj, uint32_t evnts, int epollfd)
 {
   cmd_t *this = obj;
   tty_t *tty  = &(this->clttty);
-  int    fd   = tty->mfd;
+  int    fd   = tty->dfd;
+
+  ASSERT(ttyIsClttty(tty));
   VLPRINT(3,"START: CLTTTY tty(%p):%s(%s) fd:%d evnts:0x%08x"
 	  " cmd:%s(%p)\n", tty, tty->link, tty->path, fd, evnts,
 	  this->name, this);
@@ -306,10 +249,66 @@ cltttyEvent(void *obj, uint32_t evnts, int epollfd)
   return EVNT_HDLR_SUCCESS;
 }
 
+// EXTERNALS
+extern void
+cmdDump(cmd_t *this, FILE *f, char *prefix)
+{
+  assert(this);
+  int i=cmdbufNtoI(this->n);
+  int c=this->buf[i];
+  asciistr_t charstr = { 0,0,0,0 };
+  ascii_char2str(i, charstr);
+  
+  fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
+	  "    cmdline=\"%s\" \n    delay=%f log=%s n=%lu"
+	  " lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n", prefix, this,
+	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
+	  this->cmdline, this->delay, this->log, this->n,
+	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
+  
+  if (this->n) {
+    if (!cmdbufWrapped(this->n)) {
+      hexdump(f, this->buf, this->n);
+    } else {
+      // JA FIXME: this could probably be made to work for both cases but I 
+      // don't want to think about it 
+      size_t start = cmdbufDataStart(this->n);
+      char n = cmdbufSize - start; 
+      hexdump(f, &(this->buf[start]),  n);
+      hexdump(f, &(this->buf[0]), cmdbufSize - n);
+    }
+  }
+  ttyDump(&(this->cmdtty), f, "    cmdtty: ");
+  ttyDump(&(this->clttty), f, "    clttty: ");
+}
+
+extern bool
+cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
+	char *log)
+{
+  assert(name && cmdline); 
+  this->name              = name;
+  this->cmdline           = cmdline;
+  this->delay             = delay;
+  this->log               = log;
+  this->n                 = 0;
+  this->pid               = -1;
+  this->pidfd             = -1;
+  this->exitstatus        = -1;
+  this->retry             = true;
+  this->lastwrite.tv_sec  = 0;
+  this->lastwrite.tv_nsec = 0;
+  this->pidfded           = (evntdesc_t){ NULL, NULL };
+  ttyInit(&(this->cmdtty), NULL);
+  ttyInit(&(this->clttty), ttylink);
+  return true;
+}
+
 extern bool
 cmdCreate(cmd_t *this, bool raw)
 {
-  pid_t cpid; 
+  pid_t cpid;
+  evntdesc_t ed;
   assert(this);
   assert(this->cmdline);
   // We use pidfd to track exits of the command processes.  Right now
@@ -320,27 +319,15 @@ cmdCreate(cmd_t *this, bool raw)
 
   // First try and create a client tty for this command so that we
   // can fail early, before we try and create the command process
-  {
-    if (!ttyCreate(&this->clttty, true)) return false;
-  }
+  ed = (evntdesc_t){ .obj = this, .hdlr = cmdCltttyEvent };
+  if (!ttyCltttyCreate(&this->clttty, ed, true)) return false;
 
-  // Create new child process with a new pty connecting this process (the parent)
-  // to it -- from tlpi library
-  {
-    cpid = ptyFork(&(this->cmdtty.mfd),
-		   this->cmdtty.path, sizeof(this->cmdtty.path),
-		   NULL, NULL);
-    if (cpid == -1) {
-      perror("ptyfork");
-      return false;
-    }
-    fcntl(this->cmdtty.mfd, F_SETFD, FD_CLOEXEC);
-    //    fdSetnonblocking(this->cmdtty.mfd);
-  }
+  // Create tty that is connected to a new forked child process
+  ed = (evntdesc_t){ .obj = this, .hdlr = cmdCmdttyEvent };
+  if (!ttyCmdttyForkCreate(&(this->cmdtty), ed, &cpid)) return false;
 
   // Child: Run the command line in the new process
-  {
-    if (cpid==0) {
+  if (cpid==0) {
     if (raw) ttySetRaw(STDIN_FILENO, NULL);
     // from tlpi-dist/pty/script.c
     char *shell = getenv("SHELL");
@@ -356,24 +343,44 @@ cmdCreate(cmd_t *this, bool raw)
     perror("execlp");
     return false;
   }
-  }
   
   // Parent: finish setup the command object for the newly created
   // child
+  this->pidfd        = pidfd_open(cpid, PIDFD_NONBLOCK);
+  fcntl(this->pidfd, F_SETFD, FD_CLOEXEC);
+  this->pid          = cpid;
+  this->pidfded      = (evntdesc_t){ .hdlr = cmdPidEvent, .obj = this };
+  return true;
+}
+
+extern bool
+cmdRegisterEvents(cmd_t *this, int epollfd)
+{
+  struct epoll_event ev;
+  ASSERT(this && epollfd != -1);
+  // 1) Register for process events (termination) for this cmd
+  //    (eg. allow us to detect if the command process terminates)
   {
-    this->pidfd          = pidfd_open(cpid, PIDFD_NONBLOCK);
-    fcntl(this->pidfd, F_SETFD, FD_CLOEXEC);
-    this->pid            = cpid;
-    this->pidfded.hdlr   = cmdPidEvent;
-    this->pidfded.obj    = this;
-    this->cmdtty.opens   = 1;            // we force the open and readers counts 
-    this->cmdtty.readers = 1;            // to one to reflect the process that 
-                                         // cmd process 
-    this->cmdttyed.hdlr = cmdttyEvent;
-    this->cmdttyed.obj  = this;
-    this->cltttyed.hdlr = cltttyEvent;
-    this->cltttyed.obj  = this;
+    ASSERT(this->pidfd != -1 && this->pidfded.obj == this &&
+	   this->pidfded.hdlr == cmdPidEvent);
+    ev.data.ptr = &(this->pidfded);
+    ev.events  = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET; // Edge
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, this->pidfd, &ev) == -1 ) {
+      perror("epoll_ctl: this->pidfd");
+      return false;
+    }
   }
+
+  // 2) Register for io events from this command's process via its dom
+  //    cmdtty.
+  //   (eg. let's us know when the command process has produced data on 
+  //        its standard output or standard error streams via cmd's sub tty)
+  //   event descriptor was setup at the time we created the cmdtty
+  assert(ttyRegisterEvents(&(this->cmdtty),epollfd));
+  
+  // Now take care of cmd's client tty interface
+  assert(ttyRegisterEvents(&(this->clttty),epollfd));
+  
   return true;
 }
 

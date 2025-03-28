@@ -6,17 +6,32 @@
 
 extern void ttyDump(tty_t *this, FILE *f, char *prefix);
 extern bool ttyInit(tty_t *this, char *ttylink);
-extern bool ttyCreate(tty_t *this, bool raw);
+extern bool ttyCltttyCreate(tty_t *this, evntdesc_t ed, bool raw);
+extern bool ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid);
+extern bool ttyRegisterEvents(tty_t *this, int epollfd);
 extern bool ttyCleanup(tty_t *this);
 extern int  ttyWriteChar(tty_t *this, char c, struct timespec *ts);
 extern int  ttyReadChar(tty_t *this, char *c, struct timespec *ts, double delay);
 extern void ttyPortSpace(tty_t *this, int *in, int *out, int *sin, int *sout);
-__attribute__((unused)) static int ttySlaveInQCnt(tty_t *this)
+
+// INLINES
+__attribute__((unused)) static bool ttyIsClttty(tty_t *this)
+{
+  return (this && this->link != NULL);
+}
+
+__attribute__((unused)) static bool ttyIsCmdtty(tty_t *this)
+{
+  return !ttyIsClttty(this);
+}
+
+__attribute__((unused)) static int ttySubInQCnt(tty_t *this)
 {
   int cnt; assert(ioctl(this->sfd, TIOCINQ, &cnt)==0); return cnt;
 }
-__attribute__((unused)) static void ttySlaveFlush(tty_t *this)
+__attribute__((unused)) static void ttySubFlush(tty_t *this)
 {
   tcflush(this->sfd, TCIFLUSH);
 };
 #endif
+

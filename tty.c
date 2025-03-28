@@ -1,143 +1,299 @@
 #include "yar.h"
 #include <pty/pty_master_open.h>
+#include <pty/pty_fork.h>
 #include <tty/tty_functions.h>
 
 extern void
 ttyDump(tty_t *this, FILE *f, char *prefix)
 {
   fprintf(f, "%stty: this=%p path=%s link=%s \n"
-             "       mfd=%d sfd=%d ifd=%d\n"
-	  "       rbytes=%lu wbytes=%lu opens=%d readers=%d\n",
+             "       dfd=%d sfd=%d ifd=%d iwd=%d\n"
+	  "       rbytes=%lu wbytes=%lu opens=%d\n",
 	  prefix, this,  this->path, this->link,
-	  this->mfd, this->sfd, this->ifd, this->rbytes, this->wbytes,
-	  this->opens, this->readers);
+	  this->dfd, this->sfd, this->ifd, this->iwd,
+	  this->rbytes, this->wbytes, this->opens);
+}
+
+
+static evnthdlrrc_t
+ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
+{
+  tty_t * this = obj;
+  
+  if (verbose(2)) {
+    ttyDump(this, stderr, "ttyNotifyEvent on:\n  ");
+  }
+   if (evnts & EPOLLIN) {
+    VLPRINT(2, "EPOLLIN(%x)\n", EPOLLIN);
+    struct inotify_event iev;
+    uint32_t ievents;
+    ssize_t len = read(this->ifd, &iev, sizeof(iev));
+    if (len != sizeof(iev)) {
+      perror("read");
+      NYI;
+    }
+    ievents = iev.mask;
+    switch (ievents) {
+    case IN_OPEN:
+      this->opens++;
+      VLPRINT(1, "%s: %s(%s): OPENED: opens=%d\n",
+	      (ttyIsCmdtty(this)) ? "cmdtty" : "clttty", this->link, this->path,
+	      this->opens);
+      ievents = ievents & ~IN_OPEN;
+      break;
+    case IN_CLOSE_WRITE:
+    case IN_CLOSE_NOWRITE:
+      this->opens--;
+      VLPRINT(1, "%s: %s(%s): CLOSED: opens=%d\n",
+	      (ttyIsCmdtty(this)) ? "cmdtty" : "clttty", this->link, this->path,
+	      this->opens);
+      assert(this->opens >= 0);
+      ievents = ievents & ~IN_CLOSE;
+      break;
+    default:
+      EPRINT("Unexpected notify case: iev.mask:0x%x ievents:0x%x\n",
+	     iev.mask, ievents);
+      NYI;
+    }
+    assert(ievents == 0);
+    evnts = evnts & ~EPOLLIN;
+    if (evnts==0) goto done;
+  }
+  if (evnts & EPOLLHUP) {
+    VLPRINT(2, "EPOLLHUP(%x)\n", EPOLLHUP);
+    assert(0);
+  }
+  if (evnts & EPOLLRDHUP) {
+    VLPRINT(2, "EPOLLRDHUP(%x)\n", EPOLLRDHUP);
+    assert(0);
+  }
+  if (evnts & EPOLLERR) {
+    VLPRINT(2, "EPOLLERR(%x)\n", EPOLLERR);
+    assert(0);
+  }
+  if (evnts != 0) {
+    VLPRINT(2, "unknown events evnts:%x", evnts);
+    assert(0);
+  }
+ done:
+  return EVNT_HDLR_SUCCESS;
 }
 
 extern bool
 ttyInit(tty_t *this, char *ttylink)
 {
+  // a non null tty link means the tty is a client tty see ttyIsClient in .h
   this->path[0]   =  0;
   this->link      =  ttylink;
   this->rbytes    =  0;
   this->wbytes    =  0;
-  this->mfd       = -1;
+  this->delaycnt  =  0;
+  this->dfd       = -1;
   this->sfd       = -1;
   this->ifd       = -1;
+  this->iwd       = -1;
   this->opens     =  0;
-  this->readers   =  0;
+  this->dfded     = (evntdesc_t){ NULL, NULL };
+  this->ifded     = (evntdesc_t){ NULL, NULL }; 
   return true;
 }
 
 extern bool
-ttyCreate(tty_t *this, bool raw)
+ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid)
+{
+  ASSERT(this && ttyIsCmdtty(this) && this->dfd == -1);
+  // In the case of command tty's the construction of the pty
+  // is handled by the caller so simply assign the fd's and event
+  // handlers and we are done;
+
+  *cpid = ptyFork(&(this->dfd),
+		  this->path, sizeof(this->path),
+		  NULL, NULL);
+  if (*cpid == -1) {
+    perror("ptyfork");
+    goto cleanup;
+  }
+  fcntl(this->dfd, F_SETFD, FD_CLOEXEC);
+  // FIXME: JA: Not sure why this breaks thinks???
+  //    fdSetnonblocking(this->cmdtty.mfd);
+
+  // setup register for inotify events on the pts to track opens and closes 
+  this->ifd = inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
+  if (this->ifd == -1) {
+    perror("inotify_init1");
+    goto cleanup;
+  }
+  this->iwd = inotify_add_watch(this->ifd, this->path, IN_OPEN | IN_CLOSE);
+  if (this->iwd == -1) {
+    perror("inotify_add_watch");
+    goto cleanup;
+  }
+  
+  this->sfd   = -1;
+  this->dfded = ed;
+  this->ifded = (evntdesc_t){ .hdlr = ttyNotifyEvent, .obj = this };
+  if (verbose(1)) ttyDump(this, stderr, "  Created ");
+  return true;
+ cleanup:
+  ttyCleanup(this);
+  return false;
+}
+
+extern bool
+ttyCltttyCreate(tty_t *this, evntdesc_t ed, bool raw)
 {
   int sfd;
   VLPRINT(1, "this=%p\n", this);
 
-  assert(this);
-  assert(this->mfd == -1);
+  ASSERT(this && ttyIsClttty(this) && this->dfd == -1);
 
   if (this->link != NULL && access(this->link, F_OK)==0) {
     EPRINT("%s already exists\n", this->link);
-    return false;
+    goto cleanup;
   }
   
-  this->mfd = ptyMasterOpen(this->path, TTY_MAX_PATH);
-  if (this->mfd == -1) {
+  this->dfd = ptyMasterOpen(this->path, TTY_MAX_PATH);
+  if (this->dfd == -1) {
     perror("ptyMasterOpen failed:");
-    return false;
+    goto cleanup;
   }
-  fcntl(this->mfd, F_SETFD, FD_CLOEXEC);
+  fcntl(this->dfd, F_SETFD, FD_CLOEXEC);
 
   // we use non blocking reads and watch for EAGAIN on writes
   // to see when we have exhausted the kernel tty port buffer
-  fdSetnonblocking(this->mfd);
+  fdSetnonblocking(this->dfd);
   
   // we open the slave side and keep it open to ensure
   // that if out clients come and got via opens and close
   // of the slave side the slave tty and its persistent state
-  // buffer and flags will survive.  
+  // buffer and flags will survive.
+  // NOTE: We do this before we start tracking opens ... so not reflected
+  //       in opens count! Normal state for clttty.opens == 0
   sfd = open(this->path, O_RDWR);
   if (sfd == -1) {
     perror("client side of pty could not be opened");
-    close(this->mfd);
-    this->mfd = -1;
-    return false;
+    goto cleanup;
   }
-  fcntl(this->sfd, F_SETFD, FD_CLOEXEC);
+  assert(fcntl(sfd, F_SETFD, FD_CLOEXEC)!=-1);
   if (raw) {
     ttySetRaw(sfd, NULL);
   }
-  
+
+  // create file system link to the sub-tty (it is a client tty)
   if (this->link != NULL) {
     VLPRINT(2, "linking %s->%s\n", this->path, this->link);
     int rc =symlink(this->path, this->link);
     if (rc!=0) {
       perror("failed tty link create failed");
-      return false;
+      goto cleanup;
     }
   }
-
+  
+  // setup register for inotify events on the pts to track opens and closes 
+  this->ifd = inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
+  if (this->ifd == -1) {
+    perror("inotify_init1");
+    goto cleanup;
+  }
+  this->iwd = inotify_add_watch(this->ifd, this->path, IN_OPEN | IN_CLOSE);
+  if (this->iwd == -1) {
+    perror("inotify_add_watch");
+    goto cleanup;
+  }
+  
   this->sfd     = sfd;
   this->rbytes  = 0;
   this->wbytes  = 0;
   this->opens   = 0;
-  this->readers = 0;
+
+  // setup event descriptors to so events to this tty will be handled
+  // correctly
+  this->dfded = ed;
+  this->ifded = (evntdesc_t){ .hdlr = ttyNotifyEvent, .obj = this };
   
   if (verbose(1)) ttyDump(this, stderr, "  Created ");
+  return true;
+ cleanup:
+  ttyCleanup(this);
+  return false;
+}
+
+extern bool
+ttyRegisterEvents(tty_t *this, int epollfd)
+{
+  int fd;
+  struct epoll_event ev;
+
+  // 1) Register IO events from the tty's dom-tty
+  //    (eg. allows us to detect data arrival and errors from the sub-tty
+  ASSERT(this && this->dfd != -1);
+  fd = this->dfd;
+  ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR; // Level 
+  ev.data.ptr = &this->dfded;
+  if (epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &ev) == -1 ) {
+    perror("epoll_ctl: cmd->cmdtty.dfd");
+    return false;
+  }
+
+  // 2) Register for inotify events (open and closes) for  
+  //    tty's sub tty file path (eg. /dev/pts/XX)
+  // we do this for both cmd and clt ttys -- for cmd tty's we typically
+  // expect one open and close but really depends on what the cmd does
+  ASSERT(this->ifd != -1 && this->iwd != -1);
+  fd = this->ifd;
+  ev.events   = EPOLLIN |  EPOLLHUP | EPOLLRDHUP | EPOLLERR; // Level 
+  ev.data.ptr = &this->ifded;
+  if (epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &ev) == -1 ) {
+    perror("epoll_ctl: cmd->cmdtty.dfd");
+    return false;
+  }
+
   return true;
 }
 
 extern int
 ttyWriteChar(tty_t *this, char c, struct timespec *ts)
-{
+{ 
   int n=0;
- retry:
-  n = write(this->mfd, &c, 1);
-  if (n==-1) {
-    if (errno==EAGAIN) {
-      if (this->readers==0) {
-	// FIXME: JA think about race conditions with a new reader
-	//        starting when the port buffer is full
-	// we have no readers
-	int sqc = ttySlaveInQCnt(this);
-	ttySlaveFlush(this);
-	VLPRINT(1, "write to %s(%s) failed with %d opens %d readers:"
-		" FLUSHED: %d bytes\n",
-		this->link, this->path, this->opens, this->readers, sqc);
-	n = write(this->mfd, &c, 1);
-	goto retry;
-      } else {
-	EPRINT("failed to write data to %s(%s) with %d opens and %d readers\n"
-	       "IMPLEMENT FLOW CONTROL: hang on to failed character & retry\n",
-	       this->link, this->path, this->opens, this->readers);
+
+  if (this->opens != 0) {
+    n = write(this->dfd, &c, 1);
+    if (n==-1) {
+      if (errno==EAGAIN) {
+	// write out of space??? let -1 return to caller to handle
+	VLPRINT(2, "%s(%s) client is a slow child be kind\n", this->link,
+		this->path);
+      }  else {
+	perror("ttyWriteChar write failed");
 	NYI;
       }
-    } else {
-      perror("ttyWriteChar write failed");
+    } else if (n==1) {
+      // success mark the time of the write if needed
+      if (ts) {
+	if (clock_gettime(CLOCK_SOURCE, ts) == -1) {
+	  perror("clock_gettime");
+	  NYI;
+	}
+      }
+      // book keeping
+      this->wbytes++;
+      if (verbose(2)) {
+	asciistr_t charstr;
+	ascii_char2str((int)c, charstr);
+	VPRINT("  %p:%s(%s): fd:%d c:%02x(%s) %s", this, this->link, this->path,
+	       this->dfd, c, charstr,
+	       (ascii_isprintable(c)) ? "" : "^^^^ NOT PRINTABLE ^^^^");
+	if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
+	else fprintf(stderr, "\n");
+      }
+  } else {
+      // n==0
+      EPRINT("write returned unexpected value?? n=%d\n", n);
       NYI;
     }
-  } else if (n==1) {
-    if (ts) {
-      if (clock_gettime(CLOCK_SOURCE, ts) == -1) {
-	perror("clock_gettime");
-	NYI;
-      }
-    }
-    this->wbytes++;
-    if (verbose(2)) {
-      asciistr_t charstr;
-      ascii_char2str((int)c, charstr);
-      VPRINT("  %p:%s(%s): fd:%d c:%02x(%s) %s", this, this->link, this->path,
-	     this->mfd, c, charstr,
-	     (ascii_isprintable(c)) ? "" : "^^^^ NOT PRINTABLE ^^^^");
-      if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
-      else fprintf(stderr, "\n");
-    }
   } else {
-    // n==0
-    EPRINT("write returned unexpected value?? n=%d\n", n);
-    NYI;
+    // no one is listening so pretend the write succeeded
+    n=1;
   }
   return n;
 }
@@ -145,8 +301,8 @@ ttyWriteChar(tty_t *this, char c, struct timespec *ts)
 extern void
 ttyPortSpace(tty_t *this, int *min, int *mout, int *sin, int *sout)
 {
-  assert(ioctl(this->mfd, TIOCINQ, min)==0);
-  assert(ioctl(this->mfd, TIOCOUTQ, mout)==0);
+  assert(ioctl(this->dfd, TIOCINQ, min)==0);
+  assert(ioctl(this->dfd, TIOCOUTQ, mout)==0);
   assert(ioctl(this->sfd, TIOCINQ, sin)==0);
   assert(ioctl(this->sfd, TIOCOUTQ, sout)==0);
 }
@@ -168,14 +324,14 @@ ttyReadChar(tty_t *this, char *c, struct timespec *ts, double delay)
       return 0;
     }
   }
-  int n = read(this->mfd, c, 1);
+  int n = read(this->dfd, c, 1);
   
   if (n==1) {
     if (verbose(3)) {
 	asciistr_t charstr;
 	ascii_char2str((int)(*c), charstr);
 	VPRINT("  %p:%s(%s) fd:%d c:%02x(%s)\n", this, this->link,
-	       this->path, this->mfd, *c, charstr);
+	       this->path, this->dfd, *c, charstr);
       }
     this->rbytes++;
   } else {
@@ -192,22 +348,21 @@ ttyCleanup(tty_t *this)
   if (verbose(1)) {
     ttyDump(this, stderr, NULL);
   }
-  if (this->mfd == -1) return true;
+  if (this->dfd == -1) return true;
   
-  if (this->mfd  != -1 && close(this->mfd) != 0) perror("close tty->mfd");
-  if (this->sfd  != -1 && close(this->sfd) != 0) perror("close tty->sfd"); 
   if (this->ifd  != -1 && close(this->ifd) != 0) perror("close tty->ifd");
+  if (this->dfd  != -1 && close(this->dfd) != 0) perror("close tty->dfd");
+  if (this->sfd  != -1 && close(this->sfd) != 0) perror("close tty->sfd"); 
   if (this->link != NULL && this->link[0] !=  0 && unlink(this->link) != 0) {
     perror("unlink tty->link");
   }
   
-  this->mfd     = -1;
+  this->dfd     = -1;
   this->sfd     = -1;
-  this->ifd     = -1;
+  this->iwd     = -1;
   this->path[0] =  0;
   this->rbytes  =  0;
   this->wbytes  =  0;
-  this->readers =  0;
   this->opens   =  0;
 
   return true;
