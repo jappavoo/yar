@@ -107,6 +107,8 @@ ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid)
   // is handled by the caller so simply assign the fd's and event
   // handlers and we are done;
 
+  int waitpipe[2];
+  assert(pipe2(waitpipe, O_CLOEXEC)!=-1);
   *cpid = ptyFork(&(this->dfd),
 		  this->path, sizeof(this->path),
 		  NULL, NULL);
@@ -118,8 +120,11 @@ ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid)
   fcntl(this->dfd, F_SETFD, FD_CLOEXEC);
 
   if (*cpid == 0) {
-    // CHILD: return immediately *cpid let's call know if they are
-    //        running in child or parent
+    // CHILD: wait for parent to finish setup of child monitoring then
+    // return to caller
+    char buf;
+    assert(read(waitpipe[0], &buf, 1)==1);
+    // close on exec takes care of closing pipe fds
     return true;
   } else {
     // PARENT: finish setting up cmd object 
@@ -139,6 +144,11 @@ ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid)
     this->sfd   = -1;
     this->dfded = ed;
     this->ifded = (evntdesc_t){ .hdlr = ttyNotifyEvent, .obj = this };
+    // release the child
+    char buf=0;
+    assert(write(waitpipe[1], &buf, 1)==1);
+    close(waitpipe[0]);
+    close(waitpipe[1]);
     if (verbose(1)) ttyDump(this, stderr, "  Created ");
     return true;
   }
@@ -260,12 +270,12 @@ ttyRegisterEvents(tty_t *this, int epollfd)
 }
 
 extern int
-ttyWriteChar(tty_t *this, char c, struct timespec *ts)
+ttyWriteBuf(tty_t *this, char *buf, int len,  struct timespec *ts)
 { 
   int n=0;
 
   if (this->opens != 0) {
-    n = write(this->dfd, &c, 1);
+    n = write(this->dfd, buf, len);
     if (n==-1) {
       if (errno==EAGAIN) {
 	// write out of space??? let -1 return to caller to handle
@@ -275,7 +285,7 @@ ttyWriteChar(tty_t *this, char c, struct timespec *ts)
 	perror("ttyWriteChar write failed");
 	NYI;
       }
-    } else if (n==1) {
+    } else if (n==len) {
       // success mark the time of the write if needed
       if (ts) {
 	if (clock_gettime(CLOCK_SOURCE, ts) == -1) {
@@ -284,13 +294,13 @@ ttyWriteChar(tty_t *this, char c, struct timespec *ts)
 	}
       }
       // book keeping
-      this->wbytes++;
+      this->wbytes+=n;
       if (verbose(2)) {
 	asciistr_t charstr;
-	ascii_char2str((int)c, charstr);
-	VPRINT("  %p:%s(%s): fd:%d c:%02x(%s) %s", this, this->link, this->path,
-	       this->dfd, c, charstr,
-	       (ascii_isprintable(c)) ? "" : "^^^^ NOT PRINTABLE ^^^^");
+	ascii_char2str((int)buf[0], charstr);
+	VPRINT("  %p:%s(%s): fd:%d n=%d buf[0]:%02x(%s) %s", this, this->link, this->path,
+	       this->dfd, n, buf[0], charstr,
+	       (ascii_isprintable(buf[0])) ? "" : "^^^^ NOT PRINTABLE ^^^^");
 	if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
 	else fprintf(stderr, "\n");
       }
@@ -301,7 +311,7 @@ ttyWriteChar(tty_t *this, char c, struct timespec *ts)
     }
   } else {
     // no one is listening so pretend the write succeeded
-    n=1;
+    n=len;
   }
   return n;
 }

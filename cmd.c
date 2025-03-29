@@ -50,13 +50,33 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
     }
     int i        = cmdbufNtoI(this->n);    // account for circular buffer
     this->buf[i] = c;                      // store character in buffer
+    assert(this->n+1 > this->n);           // yikes we rolled over
     this->n++;                             // inc n -- bytes since last flush
+    
     n = ttyWriteChar(&(this->clttty), c, NULL);  // send data to our client tty
-    if (n != 1) {
-      NYI;
+    if (n != 1) NYI;
+    if (!GBLS.linebufferbcst) { 
+      n += ttyWriteChar(&GBLS.bcsttty, c, NULL);   // send data to broadcast tty
+      if (n != 2) NYI;
+    } else {
+      if (c=='\n') {
+	if (GBLS.prefixbcst && this->bcstprefix && this->bcstprefixlen > 0) {
+	  ttyWriteBuf(&GBLS.bcsttty, this->bcstprefix, this->bcstprefixlen,
+		      NULL);
+	}
+	// got a new line write complete line to the broadcast tty
+	int start = cmdbufNtoI(this->start);
+	int end   = i;
+	if (start <= end) {
+	  n += ttyWriteBuf(&GBLS.bcsttty, (char *)&(this->buf[start]),
+			   (end - start) + 1, NULL);
+	  this->start = this->n;
+	  //	  if (n!=(len+1)) NYI;
+	} else {
+	  NYI;
+	}
+      }
     }
-    n += ttyWriteChar(&GBLS.bcsttty, c, NULL);   // send data to broadcast tty
-    if (n != 2) NYI;
     if (evnts && verbose(2)) {
       fprintf(stderr, "cmdttyEvent: <--- CMDTTY: END: EIN: tty(%p):%s(%s) fd:%d"
 	     " evnts:0x%08x n:%d cmd:%p(%s)\n",
@@ -260,10 +280,13 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
   ascii_char2str(i, charstr);
   
   fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
-	  "    cmdline=\"%s\" \n    delay=%f log=%s n=%lu"
-	  " lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n", prefix, this,
+	  "    cmdline=\"%s\" \n    bcstprefix=\"%s\"(len=%d)"
+	  " delay=%f log=%s n=%lu start=%lu "
+	  "lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n"
+	  , prefix, this,
 	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
-	  this->cmdline, this->delay, this->log, this->n,
+	  this->cmdline, this->bcstprefix, this->bcstprefixlen, this->delay,
+	  this->log, this->n, this->start,
 	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
   
   if (this->n) {
@@ -288,10 +311,14 @@ cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
 {
   assert(name && cmdline); 
   this->name              = name;
+  this->bcstprefixlen     = strlen(name)+2;
+  this->bcstprefix        = malloc(this->bcstprefixlen);
+  snprintf(this->bcstprefix, this->bcstprefixlen, "%s:", this->name);
   this->cmdline           = cmdline;
   this->delay             = delay;
   this->log               = log;
   this->n                 = 0;
+  this->start             = 0;
   this->pid               = -1;
   this->pidfd             = -1;
   this->exitstatus        = -1;
@@ -318,7 +345,7 @@ cmdCreate(cmd_t *this, bool raw)
   // the restrictions.
 
   // First try and create a client tty for this command so that we
-  // can fail early, before we try and create the command process
+  // can fail early, before we try and create the ocommand process
   ed = (evntdesc_t){ .obj = this, .hdlr = cmdCltttyEvent };
   if (!ttyCltttyCreate(&this->clttty, ed, true)) return false;
 
@@ -423,6 +450,13 @@ cmdCleanup(cmd_t *this)
     VLPRINT(1, "  exit status=%d\n", info.si_status);
     ttyCleanup(&(this->cmdtty));
     ttyCleanup(&(this->clttty));
+  }
+  // not sure we really want to do this... will need to readdress this
+  // when restarting a commandline
+  if (this->bcstprefix) {
+    free(this->bcstprefix);
+    this->bcstprefix    = NULL;
+    this->bcstprefixlen = 0;
   }
   return true;
 }

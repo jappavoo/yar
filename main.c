@@ -6,18 +6,25 @@
 #define DEFAULT_BCSTTTY_LINK "bcsttty"
 
 globals_t GBLS = {
-  .slowestcmd      = NULL,
-  .verbose         = 0,
-  .cmds            = NULL,
-  .defaultcmddelay = 0.0
+  .slowestcmd       = NULL,
+  .verbose          = 0,
+  .cmds             = NULL,
+  .linebufferbcst   = false,
+  .prefixbcst       = false,
+  .defaultcmddelay  = 0.0
 };
 
 static void
 usage(char *name)
 {
   fprintf(stderr,
-	  "USAGE: %s [-v] [-b broadcast tty link path] [-d <default read delay sec>] <name,pty,log,delay,cmd> [<name,pty,log,delay,cmd>]\n"
-	  " Yet Another Relay\n",
+	  "USAGE: %s [-v] [-b broadcast tty link path]"
+	  " [-d <default read delay sec>] [-l] [-p]"
+	  " <name,pty,log,delay,cmd> [<name,pty,log,delay,cmd>]\n"
+	  " Yet Another Relay\n"
+	  "-l enable line buffering of output from commands to broadcast tty\n"
+	  "-p enable prefix output from commands to broadcat tty with command"
+	  " name\n",
 	  name);
 }
 
@@ -174,7 +181,7 @@ argsParse(int argc, char **argv)
 {
     int opt;
     
-    while ((opt = getopt(argc, argv, "b:d:hv")) != -1) {
+    while ((opt = getopt(argc, argv, "b:d:hlpv")) != -1) {
     switch (opt) {
     case 'b':
       GBLS.bcsttty.link=optarg;
@@ -190,6 +197,12 @@ argsParse(int argc, char **argv)
      case 'h':
       usage(argv[0]);
       return false;
+    case 'l' :
+      GBLS.linebufferbcst = true;
+      break;
+    case 'p':
+      GBLS.prefixbcst = true;
+      break;
     case 'v':
       GBLS.verbose++;
       break;

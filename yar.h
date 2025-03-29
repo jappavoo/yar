@@ -1,6 +1,8 @@
 #ifndef __YAR_H__
 #define __YAR_H__
 
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,11 +106,14 @@ typedef struct  {
   evntdesc_t pidfded;         // pidfd event descriptor  
   struct timespec lastwrite;  // timestamp of last write
   char   *name;               // user defined name (link is by default name)
+  char   *bcstprefix;         // prefix to use if enabled 
   char   *cmdline;            // shell command line of command  
   char   *log;                // path to log (copy of all data written and read)
   double  delay;              // time between writes
   pid_t   pid;                // process id of running command
-  size_t  n;                  // number of bytes buffered since last flush
+  size_t  n;                  // number of bytes buffered
+  size_t  start;              // start since last flush of buffer
+  int     bcstprefixlen;      // length of prefix without null;
   int     pidfd;              // pid fd to monitor for termination
   int     exitstatus;         // exit status if command terminates
   bool    retry;              // retry if exit
@@ -124,6 +129,11 @@ typedef struct {
                               // buffer in the kernel tty port 
   tty_t  bcsttty;             // broadcast tty
   double defaultcmddelay;     // default value for sending data to commands
+  bool   linebufferbcst;      // if true output from commands sent to broadcast
+                              // tty will be line buffered to avoid interleaving
+                              // within a line (max line size is CMD_BUF_SIZE).
+  bool   prefixbcst;          // prefix writes to broadcast from cmd with cmd
+                              // name
   int    verbose;             // verbosity level 
 } globals_t;
 

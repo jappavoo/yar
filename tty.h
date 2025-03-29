@@ -10,11 +10,17 @@ extern bool ttyCltttyCreate(tty_t *this, evntdesc_t ed, bool raw);
 extern bool ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid);
 extern bool ttyRegisterEvents(tty_t *this, int epollfd);
 extern bool ttyCleanup(tty_t *this);
-extern int  ttyWriteChar(tty_t *this, char c, struct timespec *ts);
+extern int  ttyWriteBuf(tty_t *this, char *buf, int len, struct timespec *ts);
 extern int  ttyReadChar(tty_t *this, char *c, struct timespec *ts, double delay);
 extern void ttyPortSpace(tty_t *this, int *in, int *out, int *sin, int *sout);
 
 // INLINES
+__attribute__((unused)) static int
+ttyWriteChar(tty_t *this, char c, struct timespec *ts)
+{
+  return ttyWriteBuf(this, &c, 1, ts);
+}
+
 __attribute__((unused)) static bool ttyIsClttty(tty_t *this)
 {
   return (this && this->link != NULL);
