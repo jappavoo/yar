@@ -16,10 +16,10 @@
 #include <errno.h>
 #include <sys/ipc.h>
 #include <sys/sem.h>
-#include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
 #include <sys/inotify.h>
+#include <sys/ioctl.h>
 
 //#define ASSERTS_OFF
 //#define VERBOSE_CHECKS_OFF

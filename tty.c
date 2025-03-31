@@ -2,6 +2,7 @@
 #include <pty/pty_master_open.h>
 #include <pty/pty_fork.h>
 #include <tty/tty_functions.h>
+#include <fcntl.h>
 
 extern void
 ttyDump(tty_t *this, FILE *f, char *prefix)
@@ -99,63 +100,6 @@ ttyInit(tty_t *this, char *ttylink)
   return true;
 }
 
-extern bool
-ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid)
-{
-  ASSERT(this && ttyIsCmdtty(this) && this->dfd == -1);
-  // In the case of command tty's the construction of the pty
-  // is handled by the caller so simply assign the fd's and event
-  // handlers and we are done;
-
-  int waitpipe[2];
-  assert(pipe2(waitpipe, O_CLOEXEC)!=-1);
-  *cpid = ptyFork(&(this->dfd),
-		  this->path, sizeof(this->path),
-		  NULL, NULL);
-  if (*cpid == -1) {
-    perror("ptyfork");
-    goto cleanup;
-  }
-  // **** WARNING: RUNNING IN BOTH PARENT AND CHILD!!!!!
-  fcntl(this->dfd, F_SETFD, FD_CLOEXEC);
-
-  if (*cpid == 0) {
-    // CHILD: wait for parent to finish setup of child monitoring then
-    // return to caller
-    char buf;
-    assert(read(waitpipe[0], &buf, 1)==1);
-    // close on exec takes care of closing pipe fds
-    return true;
-  } else {
-    // PARENT: finish setting up cmd object 
-    fdSetnonblocking(this->dfd);
-    
-    // setup register for inotify events on the pts to track opens and closes 
-    this->ifd = inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
-    if (this->ifd == -1) {
-      perror("inotify_init1");
-      goto cleanup;
-    }
-    this->iwd = inotify_add_watch(this->ifd, this->path, IN_OPEN | IN_CLOSE);
-    if (this->iwd == -1) {
-      perror("inotify_add_watch");
-      goto cleanup;
-    }
-    this->sfd   = -1;
-    this->dfded = ed;
-    this->ifded = (evntdesc_t){ .hdlr = ttyNotifyEvent, .obj = this };
-    // release the child
-    char buf=0;
-    assert(write(waitpipe[1], &buf, 1)==1);
-    close(waitpipe[0]);
-    close(waitpipe[1]);
-    if (verbose(1)) ttyDump(this, stderr, "  Created ");
-    return true;
-  }
- cleanup:
-  ttyCleanup(this);
-  return false;
-}
 
 extern bool
 ttyCreate(tty_t *this, evntdesc_t ed, bool raw)

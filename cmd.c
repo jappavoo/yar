@@ -1,11 +1,27 @@
 #include "yar.h"
 #include <sys/syscall.h>
-#include <sys/pidfd.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <poll.h>
 #include <tty/tty_functions.h>
 #include <time.h>
+
+#ifdef NOSYSPIDFD
+// JA: FIXME HACK to compile on older ubuntu system like pt-psml
+//     where there is there is non pidfd and fcntl header problems
+#include <linux/pidfd.h>
+#include <linux/wait.h>
+static int
+pidfd_open(pid_t pid, unsigned int flags)
+{
+  return syscall(__NR_pidfd_open, pid, flags);
+}
+int open(const char *pathname, int flags);
+int fcntl(int fd, int cmd, ... /* arg */ );
+#else
+#include <sys/pidfd.h>
+#endif
+
 
 // MACROS to help with circular cmdbuffer management --
 //   This likely could be improved but wrote for comprehension not performance

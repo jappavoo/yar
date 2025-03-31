@@ -2,6 +2,7 @@
 #include "yar.h"
 #include <getopt.h>
 #include <signal.h>
+#include <fcntl.h>
 
 #define DEFAULT_BCSTTTY_LINK "bcsttty"
 

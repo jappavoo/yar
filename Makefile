@@ -15,7 +15,13 @@ TLPIDIR    := ext/tlpi-dist
 TLPIINCS    = ${TLPIDIR}
 TLPILIBDIR  = ${TLPIDIR}
 TLPILIB     = tlpi
+
 CFLAGS     += -I${UTHASHINCS} -I${TSCLOGINCS} -I${TLPIINCS}
+ifeq ($(wildcard /usr/include/sys/pidfd.h),)
+	CFLAGS += -DNOSYSPIDFD
+endif
+
+
 LDFLAGS    += -L${TLPILIBDIR} -l${TLPILIB}
 EXTFILES    = ${TSCLOGINCS}/now.h ${UTHASHINCS}/uthash.h \
 	${TLPIDIR}/lib${TLPILIB}.a
