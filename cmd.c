@@ -395,33 +395,52 @@ cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
   return true;
 }
 
+// NOTE caller has to register this new process with epoll loop!
+// FIXME: JA: add cmdRegisterPidFd
 extern bool
-cmdCreate(cmd_t *this, bool raw)
+cmdStart(cmd_t *this, bool raw)
 {
   pid_t cpid;
-  evntdesc_t ed;
-  assert(this);
-  assert(this->cmdline);
-  // We use pidfd to track exits of the command processes.  Right now
-  // we are using fork to create these processes, however we might
-  // need to switch to using clone2 so that we can more precisely meet
-  // the requirements for using pidfd's.  See man pidfd_open for
-  // the restrictions.
-
-  // First try and create a client tty for this command so that we
-  // can fail early, before we try and create the ocommand process
-  ed = (evntdesc_t){ .obj = this, .hdlr = cmdCltttyEvent };
-  if (!ttyCltttyCreate(&this->clttty, ed, true)) return false;
-
-  // Create tty that is connected to a NEW forked child process
-  ed = (evntdesc_t){ .obj = this, .hdlr = cmdCmdttyEvent };
-  if (!ttyCmdttyForkCreate(&(this->cmdtty), ed, &cpid)) return false;
+  // we expect the cmdtty to be created with both the dom and sub sides
+  // open in the yar process
+  ASSERT(this && !cmdIsRunning(this) &&
+	 this->cmdtty.dfd != -1 && this->cmdtty.sfd != -1);
   
+  // NOTE: the sub-tty has been created and is being
+  //       watched via inotify for opens.  When fork/exec'd command process
+  //       opens the slave we will get and event and bump the open count
+  cpid = fork();
   // **** WARNING RUNNING IN BOTH PARENT AND CHILD
+  if (cpid == -1) {
+    perror("fork");
+    assert(cpid != -1);
+  }
   
   if (cpid==0) {
     // CHILD: Run the command line in the new process
+    // inspired by pty_fork form tlpi-dist
+    
+    // create a new session 
+    assert(setsid() != -1);
+
+    // we do a new open on the sub-tty to count it as an open of the tty
+    // by the child
+    int subfd = open(this->cmdtty.path, O_RDWR);   
+    if (subfd == -1) {
+      perror("open of sub-tty in child");
+      assert(subfd != -1);
+    }
+    
+    // make the cmd sub-tty the controlling tty
+    assert(ioctl(subfd, TIOCSCTTY, 0) != -1); 
+
+    /* Duplicate sub-tty to be child's stdin, stdout, and stderr */
+    assert(dup2(subfd, STDIN_FILENO) == STDIN_FILENO);
+    assert(dup2(subfd, STDOUT_FILENO) == STDOUT_FILENO);
+    assert(dup2(subfd, STDERR_FILENO) == STDERR_FILENO);
+
     if (raw) ttySetRaw(STDIN_FILENO, NULL);
+
     // from tlpi-dist/pty/script.c
     char *shell = getenv("SHELL");
     if (shell == NULL || *shell == '\0') shell = "/bin/sh";
@@ -445,23 +464,30 @@ cmdCreate(cmd_t *this, bool raw)
   }
 }
 
-#if 0
-static bool
-cmdStart(cmd_t *this)
+extern bool
+cmdCreate(cmd_t *this, bool startnow)
 {
-  ASSERT(this && !cmdIsRunning(this));
+  evntdesc_t ed;
+  assert(this);
+  assert(this->cmdline);
+  // We use pidfd to track exits of the command processes.  Right now
+  // we are using fork to create these processes, however we might
+  // need to switch to using clone2 so that we can more precisely meet
+  // the requirements for using pidfd's.  See man pidfd_open for
+  // the restrictions.
 
-  return true;
+  // First try and create a client tty for this command so that we
+  // can fail early, before we try and create the ocommand process
+  ed = (evntdesc_t){ .obj = this, .hdlr = cmdCltttyEvent };
+  if (!ttyCreate(&this->clttty, ed, true)) return false;
+
+  // Create tty that is connected to a NEW forked child process
+  ed = (evntdesc_t){ .obj = this, .hdlr = cmdCmdttyEvent };
+  if (!ttyCreate(&(this->cmdtty), ed, true)) return false;
+
+  if (startnow) return cmdStart(this, true);
+  else return true;
 }
-
-static bool
-cmdStop(cmd_t *this)
-{
-  ASSERT(this && cmdIsRunning(this));
-
-  return true;
-}
-#endif
 
 extern bool
 cmdRegisterEvents(cmd_t *this, int epollfd)

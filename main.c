@@ -425,7 +425,7 @@ int main(int argc, char **argv)
   // create the broadcast tty
   {
     evntdesc_t ed = { .obj = &(GBLS.bcsttty), .hdlr = bcstttyEvent };
-    if (!ttyCltttyCreate(&GBLS.bcsttty, ed, true)) EEXIT();
+    if (!ttyCreate(&GBLS.bcsttty, ed, true)) EEXIT();
   }
   if (!theLoop()) EEXIT();
   

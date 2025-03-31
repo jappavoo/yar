@@ -158,12 +158,12 @@ ttyCmdttyForkCreate(tty_t *this, evntdesc_t ed, pid_t *cpid)
 }
 
 extern bool
-ttyCltttyCreate(tty_t *this, evntdesc_t ed, bool raw)
+ttyCreate(tty_t *this, evntdesc_t ed, bool raw)
 {
   int sfd;
   VLPRINT(1, "this=%p\n", this);
 
-  ASSERT(this && ttyIsClttty(this) && this->dfd == -1);
+  ASSERT(this && this->dfd == -1);
 
   if (this->link != NULL && access(this->link, F_OK)==0) {
     EPRINT("%s already exists\n", this->link);
@@ -181,18 +181,19 @@ ttyCltttyCreate(tty_t *this, evntdesc_t ed, bool raw)
   // to see when we have exhausted the kernel tty port buffer
   fdSetnonblocking(this->dfd);
   
-  // we open the slave side and keep it open to ensure
-  // that if out clients come and got via opens and close
-  // of the slave side the slave tty and its persistent state
+  // we open the sub side and keep it open to ensure
+  // that if our clients or commands come and got via opens and close
+  // of the sub side the su-tty and its persistent state
   // buffer and flags will survive.
-  // NOTE: We do this before we start tracking opens ... so not reflected
-  //       in opens count! Normal state for clttty.opens == 0
+  // NOTE: We do this before we start tracking opens ... so this open is not 
+  //       reflected in opens count! Normal state for ttys.opens is 0
   sfd = open(this->path, O_RDWR);
   if (sfd == -1) {
     perror("client side of pty could not be opened");
     goto cleanup;
   }
   assert(fcntl(sfd, F_SETFD, FD_CLOEXEC)!=-1);
+  
   if (raw) {
     ttySetRaw(sfd, NULL);
   }
