@@ -434,11 +434,14 @@ cmdStart(cmd_t *this, bool raw)
     // make the cmd sub-tty the controlling tty
     assert(ioctl(subfd, TIOCSCTTY, 0) != -1); 
 
-    /* Duplicate sub-tty to be child's stdin, stdout, and stderr */
+    // Duplicate sub-tty to be child's stdin, stdout, and stderr 
     assert(dup2(subfd, STDIN_FILENO) == STDIN_FILENO);
     assert(dup2(subfd, STDOUT_FILENO) == STDOUT_FILENO);
     assert(dup2(subfd, STDERR_FILENO) == STDERR_FILENO);
 
+    // avoid leaking another file descriptor close subfd if needed 
+    if (subfd > STDERR_FILENO) assert(close(subfd)!=-1);
+    
     if (raw) ttySetRaw(STDIN_FILENO, NULL);
 
     // from tlpi-dist/pty/script.c
