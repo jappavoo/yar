@@ -15,27 +15,27 @@ extern int  ttyReadChar(tty_t *this, char *c, struct timespec *ts, double delay)
 extern void ttyPortSpace(tty_t *this, int *in, int *out, int *sin, int *sout);
 
 // INLINES
-__attribute__((unused)) static int
+__attribute__((unused)) static inline int
 ttyWriteChar(tty_t *this, char c, struct timespec *ts)
 {
   return ttyWriteBuf(this, &c, 1, ts);
 }
 
-__attribute__((unused)) static bool ttyIsClttty(tty_t *this)
+__attribute__((unused)) static inline bool ttyIsClttty(tty_t *this)
 {
   return (this && this->link != NULL);
 }
 
-__attribute__((unused)) static bool ttyIsCmdtty(tty_t *this)
+__attribute__((unused)) static inline bool ttyIsCmdtty(tty_t *this)
 {
   return !ttyIsClttty(this);
 }
 
-__attribute__((unused)) static int ttySubInQCnt(tty_t *this)
+__attribute__((unused)) static inline int ttySubInQCnt(tty_t *this)
 {
   int cnt; assert(ioctl(this->sfd, TIOCINQ, &cnt)==0); return cnt;
 }
-__attribute__((unused)) static void ttySubFlush(tty_t *this)
+__attribute__((unused)) static inline void ttySubFlush(tty_t *this)
 {
   tcflush(this->sfd, TCIFLUSH);
 };

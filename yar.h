@@ -111,8 +111,9 @@ typedef struct  {
   char   *log;                // path to log (copy of all data written and read)
   double  delay;              // time between writes
   pid_t   pid;                // process id of running command
-  size_t  n;                  // number of bytes buffered
-  size_t  start;              // start since last flush of buffer
+  size_t  bufn;               // number of bytes buffered [0..SIZE_MAX]
+  size_t  bufstart;           // start since last flush of buffer [0..SIZE_MAX]
+  int     bufof;              // number of times a line has overflowed the buf
   int     bcstprefixlen;      // length of prefix without null;
   int     pidfd;              // pid fd to monitor for termination
   int     exitstatus;         // exit status if command terminates

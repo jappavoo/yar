@@ -8,7 +8,12 @@ extern bool cmdCreate(cmd_t *this, bool raw);
 extern bool cmdRegisterEvents(cmd_t *this, int epollfd);
 extern bool cmdCleanup(cmd_t *this);
 
-__attribute__((unused)) static int cmdWriteChar(cmd_t *this, char c)
+__attribute__((unused)) static inline bool cmdIsRunning(cmd_t *this)
+{
+  return ( this->pid != -1 ); 
+}
+
+__attribute__((unused)) static inline int cmdWriteChar(cmd_t *this, char c)
 {
   return ttyWriteChar(&(this->cmdtty), c, &(this->lastwrite));
 }

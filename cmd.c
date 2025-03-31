@@ -23,18 +23,21 @@
 
 // MISC
 static int
-cmdttyBufOutput(cmd_t *this, uint32_t evnts)
+cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
 {
   char c;
   tty_t *tty = &(this->cmdtty);
   int fd = tty->dfd;
   int n;
-  
+
+  // read the a character from std out/err of the command process via
+  // cmdtty dom
   n  = ttyReadChar(tty, &c, NULL, 0);
   if (n==0) {
     VLPRINT(2, "%p: read returned 0\n", this);
     NYI;
   } else if (n==1)  {
+    
     if (evnts && verbose(2)) {
       asciistr_t charstr;
       ascii_char2str(c, charstr);
@@ -48,33 +51,93 @@ cmdttyBufOutput(cmd_t *this, uint32_t evnts)
 	      n);
       
     }
-    int i        = cmdbufNtoI(this->n);    // account for circular buffer
+    int i        = cmdbufNtoI(this->bufn); // account for circular buffer
     this->buf[i] = c;                      // store character in buffer
-    assert(this->n+1 > this->n);           // yikes we rolled over
-    this->n++;                             // inc n -- bytes since last flush
-    
-    n = ttyWriteChar(&(this->clttty), c, NULL);  // send data to our client tty
-    if (n != 1) NYI;
+    assert(this->bufn+1 > this->bufn);     // yikes we rolled over
+    this->bufn++;                          // inc n -- bytes since last flush
+
+    int written;                           
+    written = ttyWriteChar(&(this->clttty), c, NULL); // write data to clt tty
+    if (written != 1) NYI;
+    n = written;
     if (!GBLS.linebufferbcst) { 
-      n += ttyWriteChar(&GBLS.bcsttty, c, NULL);   // send data to broadcast tty
+      written = ttyWriteChar(&GBLS.bcsttty, c, NULL); // write data to bcst tty
       if (n != 2) NYI;
+      n += written;
     } else {
+      if (cmdbufNtoI(this->bufn) == cmdbufNtoI(this->bufstart)) {
+	this->bufof++; // buffer just wrapped
+	EPRINT("cmd:%s line overflowed output buffer: start:%zu m:%zu of:%d\n",
+	       this->name, this->bufstart, this->bufn, this->bufof);
+      }
       if (c=='\n') {
+	// Write cmd prefix to tty if enabled
 	if (GBLS.prefixbcst && this->bcstprefix && this->bcstprefixlen > 0) {
-	  ttyWriteBuf(&GBLS.bcsttty, this->bcstprefix, this->bcstprefixlen,
+	  written = ttyWriteBuf(&GBLS.bcsttty, this->bcstprefix,
+				this->bcstprefixlen,
 		      NULL);
+	  assert(written == this->bcstprefixlen);
+	  // we don't include prefix in count of data written to the tty
 	}
-	// got a new line write complete line to the broadcast tty
-	int start = cmdbufNtoI(this->start);
-	int end   = i;
-	if (start <= end) {
-	  n += ttyWriteBuf(&GBLS.bcsttty, (char *)&(this->buf[start]),
-			   (end - start) + 1, NULL);
-	  this->start = this->n;
-	  //	  if (n!=(len+1)) NYI;
+	int len;
+	int end = i;          // end of line is last location we put data
+	if (this->bufof==0) {
+	  // Handle no over flow cases -> buffer holds a complete line 
+	  int start = cmdbufNtoI(this->bufstart);
+	  if (start <= end) {
+	    // Line does not wrap the buffer (end is >= start)
+	    len = (end - start) + 1;
+	    written = ttyWriteBuf(&GBLS.bcsttty,
+				  (char *)&(this->buf[start]),
+				  len,           
+				  NULL);
+	    assert(written == len);
+	    n += written;
+	  } else {
+	    // Line wraps across end of the buffer (no overflow and start > end) 
+	    // Requires two writes: 
+	    //   1. beginning of the line is from start to buffer end
+	    len = cmdbufSize - start;
+	    ASSERT(len>=1);
+	    written= ttyWriteBuf(&GBLS.bcsttty,
+				 (char *)&(this->buf[start]),
+				 len,
+				 NULL);
+	    assert(written == len);
+	    n += written;
+	    //   2. end of the line is from buffer start to end
+	    len = end + 1;
+	    written = ttyWriteBuf(&GBLS.bcsttty,
+				  (char *)&(this->buf[0]),
+				  len,
+				  NULL);
+	    assert(written == len);
+	    n += written;
+	  }
 	} else {
-	  NYI;
+	  // handle overflow cases
+	  //  start is irrelevant last bufsize bytes written are from
+	  //  end+1 to bufend and 0 to end
+	  if ( (end+1) < cmdbufSize ) {
+	    len = cmdbufSize - (end+1);
+	    written = ttyWriteBuf(&(GBLS.bcsttty),
+			     (char *)&(this->buf[end+1]),
+			     len,
+			     NULL);
+	    assert(len == written);
+	    n += written;
+	  }
+	  // given wrapp data is from 0  to end
+	  len = end+1;
+	  written = ttyWriteBuf(&(GBLS.bcsttty),
+			   (char *)&(this->buf[0]),
+			   len,
+			   NULL);
+	  assert(written == len);
+	  n += written;
+	  this->bufof = 0;            // reset overflow count
 	}
+	this->bufstart = this->bufn;  // record start location of next line
       }
     }
     if (evnts && verbose(2)) {
@@ -95,7 +158,7 @@ static void
 cmdttyDrain(cmd_t *this)
 {
   // drain any remaining data???
-  while (cmdttyBufOutput(this,0)>0) {
+  while (cmdttyProcessOutput(this,0)>0) {
     VLPRINT(2, "%p: got data after HUP", this->name);
   }
 }
@@ -163,7 +226,7 @@ cmdCmdttyEvent(void *obj, uint32_t evnts, int epollfd)
 	    " cmd:%s(%p)\n", tty, tty->link, tty->path, fd, evnts,
 	  this->name, this);
   if (evnts & EPOLLIN) {
-    cmdttyBufOutput(this, evnts);    // data in on this fd is output from command
+    cmdttyProcessOutput(this, evnts);  // data on this fd is output from command
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
   }
@@ -274,28 +337,28 @@ extern void
 cmdDump(cmd_t *this, FILE *f, char *prefix)
 {
   assert(this);
-  int i=cmdbufNtoI(this->n);
+  int i=cmdbufNtoI(this->bufn);
   int c=this->buf[i];
   asciistr_t charstr = { 0,0,0,0 };
   ascii_char2str(i, charstr);
   
   fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
 	  "    cmdline=\"%s\" \n    bcstprefix=\"%s\"(len=%d)"
-	  " delay=%f log=%s n=%lu start=%lu "
+	  " delay=%f log=%s bufn=%lu bufstart=%lu bufof=%d "
 	  "lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n"
 	  , prefix, this,
 	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
 	  this->cmdline, this->bcstprefix, this->bcstprefixlen, this->delay,
-	  this->log, this->n, this->start,
+	  this->log, this->bufn, this->bufstart, this->bufof,
 	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
   
-  if (this->n) {
-    if (!cmdbufWrapped(this->n)) {
-      hexdump(f, this->buf, this->n);
+  if (this->bufn) {
+    if (!cmdbufWrapped(this->bufn)) {
+      hexdump(f, this->buf, this->bufn);
     } else {
       // JA FIXME: this could probably be made to work for both cases but I 
       // don't want to think about it 
-      size_t start = cmdbufDataStart(this->n);
+      size_t start = cmdbufDataStart(this->bufn);
       char n = cmdbufSize - start; 
       hexdump(f, &(this->buf[start]),  n);
       hexdump(f, &(this->buf[0]), cmdbufSize - n);
@@ -311,14 +374,15 @@ cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
 {
   assert(name && cmdline); 
   this->name              = name;
-  this->bcstprefixlen     = strlen(name)+2;
-  this->bcstprefix        = malloc(this->bcstprefixlen);
-  snprintf(this->bcstprefix, this->bcstprefixlen, "%s:", this->name);
+  this->bcstprefixlen     = strlen(name)+2;   // +2 for ": " do no include null
+  this->bcstprefix        = malloc(this->bcstprefixlen+1); // +1 for null
+  snprintf(this->bcstprefix, this->bcstprefixlen+1, "%s" ": ", this->name);
   this->cmdline           = cmdline;
   this->delay             = delay;
   this->log               = log;
-  this->n                 = 0;
-  this->start             = 0;
+  this->bufn              = 0;
+  this->bufstart          = 0;
+  this->bufof             = 0;
   this->pid               = -1;
   this->pidfd             = -1;
   this->exitstatus        = -1;
@@ -380,6 +444,24 @@ cmdCreate(cmd_t *this, bool raw)
     return true;
   }
 }
+
+#if 0
+static bool
+cmdStart(cmd_t *this)
+{
+  ASSERT(this && !cmdIsRunning(this));
+
+  return true;
+}
+
+static bool
+cmdStop(cmd_t *this)
+{
+  ASSERT(this && cmdIsRunning(this));
+
+  return true;
+}
+#endif
 
 extern bool
 cmdRegisterEvents(cmd_t *this, int epollfd)
