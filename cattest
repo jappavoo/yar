@@ -1,0 +1,1 @@
+./yar -l -p  -v -b cats 'cat0,,,,cat' 'cat1,,,,cat' 'cat2,,,,cat'
