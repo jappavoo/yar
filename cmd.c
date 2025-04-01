@@ -78,7 +78,7 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
     n = written;
     if (!GBLS.linebufferbcst) { 
       written = ttyWriteChar(&GBLS.bcsttty, c, NULL); // write data to bcst tty
-      if (n != 2) NYI;
+      if (written != 1) NYI;
       n += written;
     } else {
       if (cmdbufNtoI(this->bufn) == cmdbufNtoI(this->bufstart)) {
