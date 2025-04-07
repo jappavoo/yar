@@ -15,7 +15,6 @@ ttyDump(tty_t *this, FILE *f, char *prefix)
 	  this->rbytes, this->wbytes, this->opens);
 }
 
-
 static evnthdlrrc_t
 ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
 {
@@ -24,7 +23,7 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
   if (verbose(2)) {
     ttyDump(this, stderr, "ttyNotifyEvent on:\n  ");
   }
-   if (evnts & EPOLLIN) {
+  if (evnts & EPOLLIN) {
     VLPRINT(2, "EPOLLIN(%x)\n", EPOLLIN);
     struct inotify_event iev;
     uint32_t ievents;
@@ -222,9 +221,9 @@ ttyRegisterEvents(tty_t *this, int epollfd)
 
 extern int
 ttyWriteBuf(tty_t *this, char *buf, int len,  struct timespec *ts)
-{ 
+{
   int n=0;
-
+  
   if (this->opens != 0) {
     n = write(this->dfd, buf, len);
     if (n==-1) {
