@@ -93,6 +93,7 @@ typedef struct {
                                // sub-tty open via its link path.
   evntdesc_t dfded;            // dom fd event descriptor
   evntdesc_t ifded;            // inotify fd event descriptor
+  evntdesc_t ned;              // external notify event descriptor 
 } tty_t;
 
 // CMD Object

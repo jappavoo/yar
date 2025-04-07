@@ -140,7 +140,8 @@ GBLSAddCmd(char *cmdstr)
       free(cmd);
       return false;
     }
-    if (!cmdCreate(cmd, true)) {
+
+    if (!cmdCreate(cmd)) { 
       cmdDump(cmd, stderr, "Failed to create");
       cmdCleanup(cmd);
       free(cmd);
@@ -264,6 +265,43 @@ fdSetnonblocking(int fd)
 }
 
 evnthdlrrc_t
+bcstttyNotify(void *obj, uint32_t mask, int epollfd)
+{
+  tty_t *this = obj;
+  cmd_t *cmd, *tmp;
+
+  switch (mask) {
+  case IN_OPEN:
+    if (verbose(1)) {
+      fprintf(stderr, "OPEN: bcsttty:%s(%s) count:%d\n", 
+	      this->link, this->path, this->opens);
+    }
+    // poke all commands to ensure they are started 
+    HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
+      if (cmdStart(cmd, true, epollfd)) {
+	VPRINT("%s started pidfd=%d pid=%d\n", cmd->name, cmd->pidfd, cmd->pid);
+      }
+    }
+    mask = mask & ~IN_OPEN;
+    break;
+  case IN_CLOSE_WRITE:
+  case IN_CLOSE_NOWRITE:
+    if (verbose(1)) {
+      fprintf(stderr, "CLOSE: bcstty:%s(%s) count:%d\n", 
+	      this->link, this->path, this->opens);
+    }
+    mask = mask & ~IN_OPEN;
+    mask = mask & ~IN_CLOSE;
+    break;
+  default:
+    EPRINT("Unexpected notify case: mask:0x%x\n",
+	   mask);
+    NYI;
+  }  
+  return EVNT_HDLR_SUCCESS;
+}
+
+evnthdlrrc_t
 bcstttyEvent(void *obj, uint32_t evnts, int epollfd)
 {
   tty_t *tty = obj;
@@ -337,16 +375,18 @@ theLoop()
   // register for the broadcast client interface events
   ttyRegisterEvents(&(GBLS.bcsttty), epollfd);
 
+  
+  // cmd now register for events when started as part of lazy start
   // register for the events for all the initial commands
   {
     cmd_t *cmd, *tmp;
     // iterate over the commmands in the commands hash table (created
     // and stored in the hash table during command line arg procesing)
     HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-      if (!cmdRegisterEvents(cmd, epollfd)) return false;
+      if (!cmdRegisterCltttyEvents(cmd, epollfd)) return false;
     }
   }
-
+  
   // loop: detect events and dispatch handlers
   for (;;) {
     struct epoll_event events[MAX_EVENTS];
@@ -425,8 +465,9 @@ int main(int argc, char **argv)
 
   // create the broadcast tty
   {
-    evntdesc_t ed = { .obj = &(GBLS.bcsttty), .hdlr = bcstttyEvent };
-    if (!ttyCreate(&GBLS.bcsttty, ed, true)) EEXIT();
+    evntdesc_t ed  = { .obj = &(GBLS.bcsttty), .hdlr = bcstttyEvent };
+    evntdesc_t ned = { .obj = &(GBLS.bcsttty), .hdlr = bcstttyNotify };
+    if (!ttyCreate(&GBLS.bcsttty, ed, ned, true)) EEXIT();
   }
   if (!theLoop()) EEXIT();
   

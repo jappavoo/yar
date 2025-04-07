@@ -348,6 +348,41 @@ cmdCltttyEvent(void *obj, uint32_t evnts, int epollfd)
   return EVNT_HDLR_SUCCESS;
 }
 
+evnthdlrrc_t
+cmdCltttyNotify(void *obj, uint32_t mask, int epollfd)
+{
+  cmd_t *this = obj;
+  VPRINT("%s: mask=%04x, ifd=%d: ", this->name, mask, epollfd);
+  switch (mask) {
+  case IN_OPEN:
+    if (verbose(1)) {
+      fprintf(stderr, "OPEN: cmdtty:%s(%s) count:%d\n", 
+	      this->cmdtty.link, this->cmdtty.path,
+	      this->cmdtty.opens);
+    }
+    if (cmdStart(this, true, epollfd)) {
+      VPRINT("%s started pidfd=%d pid=%d\n", this->name, this->pidfd, this->pid);
+    }
+    mask = mask & ~IN_OPEN;
+    break;
+  case IN_CLOSE_WRITE:
+  case IN_CLOSE_NOWRITE:
+    if (verbose(1)) {
+      fprintf(stderr, "CLOSE: cmdtty:%s(%s) count:%d\n", 
+	      this->cmdtty.link, this->cmdtty.path,
+	      this->cmdtty.opens);
+    }
+    mask = mask & ~IN_OPEN;
+    mask = mask & ~IN_CLOSE;
+    break;
+  default:
+    EPRINT("Unexpected notify case: mask:0x%x\n",
+	   mask);
+    NYI;
+  }  
+  return EVNT_HDLR_SUCCESS;
+}
+
 // EXTERNALS
 extern void
 cmdDump(cmd_t *this, FILE *f, char *prefix)
@@ -414,13 +449,15 @@ cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
 // NOTE caller has to register this new process with epoll loop!
 // FIXME: JA: add cmdRegisterPidFd
 extern bool
-cmdStart(cmd_t *this, bool raw)
+cmdStart(cmd_t *this, bool raw, int epollfd)
 {
   pid_t cpid;
   // we expect the cmdtty to be created with both the dom and sub sides
   // open in the yar process
-  ASSERT(this && !cmdIsRunning(this) &&
+  ASSERT(this &&
 	 this->cmdtty.dfd != -1 && this->cmdtty.sfd != -1);
+
+  if (cmdIsRunning(this)) return false;
   
   // NOTE: the sub-tty has been created and is being
   //       watched via inotify for opens.  When fork/exec'd command process
@@ -479,12 +516,13 @@ cmdStart(cmd_t *this, bool raw)
     fcntl(this->pidfd, F_SETFD, FD_CLOEXEC);
     this->pid          = cpid;
     this->pidfded      = (evntdesc_t){ .hdlr = cmdPidEvent, .obj = this };
+    cmdRegisterProcessEvents(this, epollfd);
     return true;
   }
 }
 
 extern bool
-cmdCreate(cmd_t *this, bool startnow)
+cmdCreate(cmd_t *this)
 {
   evntdesc_t ed;
   assert(this);
@@ -498,18 +536,30 @@ cmdCreate(cmd_t *this, bool startnow)
   // First try and create a client tty for this command so that we
   // can fail early, before we try and create the ocommand process
   ed = (evntdesc_t){ .obj = this, .hdlr = cmdCltttyEvent };
-  if (!ttyCreate(&this->clttty, ed, true)) return false;
+  if (!ttyCreate(&this->clttty, ed,
+		 (evntdesc_t){.obj=this, .hdlr=cmdCltttyNotify },
+		 true)) return false;
 
   // Create tty that is connected to a NEW forked child process
   ed = (evntdesc_t){ .obj = this, .hdlr = cmdCmdttyEvent };
-  if (!ttyCreate(&(this->cmdtty), ed, true)) return false;
-
-  if (startnow) return cmdStart(this, true);
-  else return true;
+  if (!ttyCreate(&(this->cmdtty), ed,
+		 (evntdesc_t){NULL, NULL},
+		 true)) return false;
+  return true;
 }
 
 extern bool
-cmdRegisterEvents(cmd_t *this, int epollfd)
+cmdRegisterCltttyEvents(cmd_t *this, int epollfd)
+{
+  // make sure we are registered for events of clttty
+  // Note we purposefully can register for clt tty events before the command
+  // process events to allow clt tty operation to lazy start the command process
+  assert(ttyRegisterEvents(&(this->clttty),epollfd));
+  return true;
+}
+
+extern bool
+cmdRegisterProcessEvents(cmd_t *this, int epollfd)
 {
   struct epoll_event ev;
   ASSERT(this && epollfd != -1);
@@ -532,10 +582,7 @@ cmdRegisterEvents(cmd_t *this, int epollfd)
   //        its standard output or standard error streams via cmd's sub tty)
   //   event descriptor was setup at the time we created the cmdtty
   assert(ttyRegisterEvents(&(this->cmdtty),epollfd));
-  
-  // Now take care of cmd's client tty interface
-  assert(ttyRegisterEvents(&(this->clttty),epollfd));
-  
+    
   return true;
 }
 

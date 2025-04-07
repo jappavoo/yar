@@ -58,6 +58,11 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
       NYI;
     }
     assert(ievents == 0);
+    // we have handled the notify event interally call external notify handler
+    // if we have one registered
+    if (this->ned.hdlr) {
+      this->ned.hdlr(this->ned.obj, iev.mask, epollfd); 
+    }
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
   }
@@ -85,24 +90,24 @@ extern bool
 ttyInit(tty_t *this, char *ttylink)
 {
   // a non null tty link means the tty is a client tty see ttyIsClient in .h
-  this->path[0]   =  0;
-  this->link      =  ttylink;
-  this->rbytes    =  0;
-  this->wbytes    =  0;
-  this->delaycnt  =  0;
-  this->dfd       = -1;
-  this->sfd       = -1;
-  this->ifd       = -1;
-  this->iwd       = -1;
-  this->opens     =  0;
-  this->dfded     = (evntdesc_t){ NULL, NULL };
-  this->ifded     = (evntdesc_t){ NULL, NULL }; 
+  this->path[0]  =  0;
+  this->link     =  ttylink;
+  this->rbytes   =  0;
+  this->wbytes   =  0;
+  this->delaycnt =  0;
+  this->dfd      = -1;
+  this->sfd      = -1;
+  this->ifd      = -1;
+  this->iwd      = -1;
+  this->opens    =  0;
+  this->dfded    = (evntdesc_t){ NULL, NULL };
+  this->ifded    = (evntdesc_t){ NULL, NULL };
+  this->ned      = (evntdesc_t){ NULL, NULL };
   return true;
 }
 
-
 extern bool
-ttyCreate(tty_t *this, evntdesc_t ed, bool raw)
+ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw)
 {
   int sfd;
   VLPRINT(1, "this=%p\n", this);
@@ -173,6 +178,7 @@ ttyCreate(tty_t *this, evntdesc_t ed, bool raw)
   // correctly
   this->dfded = ed;
   this->ifded = (evntdesc_t){ .hdlr = ttyNotifyEvent, .obj = this };
+  this->ned   = ned;
   
   if (verbose(1)) ttyDump(this, stderr, "  Created ");
   return true;
