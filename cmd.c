@@ -191,20 +191,32 @@ cmdPidEvent(void *obj, uint32_t evnts, int epollfd)
   }
   if (evnts & EPOLLIN) {
     VLPRINT(2, "EPOLLIN(%x)\n", EPOLLIN);
-    cmdttyDrain(this);
-    // remove from event set
-    {
-      // for backwards compatiblity we use dummy versus NULL see bugs section
-      // of man epoll_ctl
+    siginfo_t info;
+    int es = waitid(P_PIDFD, fd,  &info, WEXITED);
+    if (es<0) {
+      perror("waitpid after deteching child death failed");
+      assert(0);
+    }
+    this->exitstatus = info.si_status;
+    if (verbose(1)) {
+      cmdDump(this, stderr, "*** Command Died:\n  ");
+    }
+    // remove pid fd from poll set
+    if (epollfd != -1) {
       struct epoll_event dummyev;
       if (epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, &dummyev) == -1) {
 	perror("epoll_ctl: EPOLL_CTL_DEL fd");
 	assert(0);
       }
-      close(fd);
-      this->pidfd = -1;
     }
-    cmdDump(this, stderr, "***Command Died:\n  ");
+    // reset fields
+    this->pidfd = -1;
+    this->pid   = -1;
+
+    // restart
+    assert(cmdStart(this, true, epollfd));
+    VPRINT("%s: restarted pid:%d\n", this->name, this->pid);
+    
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
   }
@@ -372,7 +384,7 @@ cmdCltttyNotify(void *obj, uint32_t mask, int epollfd)
 	      this->cmdtty.link, this->cmdtty.path,
 	      this->cmdtty.opens);
     }
-    if (cmdStop(this, epollfd)) {
+    if (cmdStop(this, epollfd, false)) {
       VPRINT("%s stopped exitstatus:%d\n", this->name, this->exitstatus);
     }
     mask = mask & ~IN_OPEN;
@@ -525,15 +537,17 @@ cmdStart(cmd_t *this, bool raw, int epollfd)
 }
 
 extern bool
-cmdStop(cmd_t *this, int epollfd)
+cmdStop(cmd_t *this, int epollfd, bool force)
 {
   
-  if (!cmdIsRunning(this) || this->clttty.opens != 0 || GBLS.bcsttty.opens != 0 ) {
+  if (!cmdIsRunning(this)) return false;
+			     
+  if (force == false && (this->clttty.opens != 0 || GBLS.bcsttty.opens != 0)) {
     return false;
   }
 
   // remove cmd pidfd from epoll as we know we are stopping it
-  {
+  if (epollfd != -1) {
     struct epoll_event dummyev;
     if (epoll_ctl(epollfd, EPOLL_CTL_DEL, this->pidfd, &dummyev) == -1) {
       perror("epoll_ctl: EPOLL_CTL_DEL fd");
@@ -653,40 +667,13 @@ cmdCleanup(cmd_t *this)
   if (verbose>0) {
     cmdDump(this, stderr, "clean: ");
   }
-  if (this->pid>0) {
-    siginfo_t info;
-    int es;
-    struct pollfd pollfd;
-    int ready;
-    assert(kill(this->pid, SIGTERM)==0);
-  retry:
-    pollfd.fd = this->pidfd;
-    pollfd.events = POLLIN;
-    ready = poll(&pollfd, 1, 100); // give it 100 millseconds to exit cleanly
-    if (ready<0) {
-      if (errno==EINTR) goto retry; else {
-	perror("poll"); assert(0);
-      }
-    }
-    if (ready == 0) {
-      // timed out ... moving on to SIGKILL
-      EPRINT("%s did not die with SIGTERM moving on to SIGKILL!", this->name);
-      cmdDump(this, stderr, "\n  ");
-      assert(kill(this->pid, SIGKILL)==0);
-      goto retry;
-    }
-    
-    es = waitid(P_PIDFD, this->pidfd,  &info, WEXITED);
-    if (es<0) {
-      perror("waitpid after SIGTERM");
-      assert(0);
-    }
-    VLPRINT(1, "  exit status=%d\n", info.si_status);
-    ttyCleanup(&(this->cmdtty));
-    ttyCleanup(&(this->clttty));
-  }
-  // not sure we really want to do this... will need to readdress this
-  // when restarting a commandline
+  
+  cmdStop(this, -1, true);
+  VLPRINT(1, "  exit status=%d\n", this->exitstatus);
+
+  ttyCleanup(&(this->cmdtty));
+  ttyCleanup(&(this->clttty));
+
   if (this->bcstprefix) {
     free(this->bcstprefix);
     this->bcstprefix    = NULL;
