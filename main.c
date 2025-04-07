@@ -383,7 +383,7 @@ theLoop()
     // iterate over the commmands in the commands hash table (created
     // and stored in the hash table during command line arg procesing)
     HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-      if (!cmdRegisterCltttyEvents(cmd, epollfd)) return false;
+      if (!cmdRegisterttyEvents(cmd, epollfd)) return false;
     }
   }
   

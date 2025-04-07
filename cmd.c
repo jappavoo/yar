@@ -372,6 +372,9 @@ cmdCltttyNotify(void *obj, uint32_t mask, int epollfd)
 	      this->cmdtty.link, this->cmdtty.path,
 	      this->cmdtty.opens);
     }
+    if (cmdStop(this, epollfd)) {
+      VPRINT("%s stopped exitstatus:%d\n", this->name, this->exitstatus);
+    }
     mask = mask & ~IN_OPEN;
     mask = mask & ~IN_CLOSE;
     break;
@@ -522,6 +525,63 @@ cmdStart(cmd_t *this, bool raw, int epollfd)
 }
 
 extern bool
+cmdStop(cmd_t *this, int epollfd)
+{
+  
+  if (!cmdIsRunning(this) || this->clttty.opens != 0 || GBLS.bcsttty.opens != 0 ) {
+    return false;
+  }
+
+  // remove cmd pidfd from epoll as we know we are stopping it
+  {
+    struct epoll_event dummyev;
+    if (epoll_ctl(epollfd, EPOLL_CTL_DEL, this->pidfd, &dummyev) == -1) {
+      perror("epoll_ctl: EPOLL_CTL_DEL fd");
+      assert(0);
+    }
+  }
+ 
+  // kill the cmd process
+  {
+    siginfo_t info;
+    int es;
+    struct pollfd pollfd;
+    int ready;
+    assert(kill(this->pid, SIGTERM)==0);
+  retry:
+    pollfd.fd = this->pidfd;
+    pollfd.events = POLLIN;
+    ready = poll(&pollfd, 1, 100); // give it 100 millseconds to exit cleanly
+    if (ready<0) {
+      if (errno==EINTR) goto retry; else {
+	perror("poll"); assert(0);
+      }
+    }
+    if (ready == 0) {
+      // timed out ... moving on to SIGKILL
+      EPRINT("%s did not die with SIGTERM moving on to SIGKILL!", this->name);
+      cmdDump(this, stderr, "\n  ");
+      assert(kill(this->pid, SIGKILL)==0);
+      goto retry;
+    }
+    
+    es = waitid(P_PIDFD, this->pidfd,  &info, WEXITED);
+    if (es<0) {
+      perror("waitpid after SIGTERM");
+      assert(0);
+    }
+    this->exitstatus = info.si_status;
+    VLPRINT(1, "  exit status=%d\n", this->exitstatus);
+    close(this->pidfd);
+  }
+  // reset fields
+  this->pidfd = -1;
+  this->pid   = -1;
+  
+  return true;
+}
+
+extern bool
 cmdCreate(cmd_t *this)
 {
   evntdesc_t ed;
@@ -549,12 +609,20 @@ cmdCreate(cmd_t *this)
 }
 
 extern bool
-cmdRegisterCltttyEvents(cmd_t *this, int epollfd)
+cmdRegisterttyEvents(cmd_t *this, int epollfd)
 {
   // make sure we are registered for events of clttty
   // Note we purposefully can register for clt tty events before the command
   // process events to allow clt tty operation to lazy start the command process
   assert(ttyRegisterEvents(&(this->clttty),epollfd));
+  
+  // Register for io events from this command's process via its dom
+  //    cmdtty.
+  //   (eg. let's us know when the command process has produced data on 
+  //        its standard output or standard error streams via cmd's sub tty)
+  //   event descriptor was setup at the time we created the cmdtty
+  assert(ttyRegisterEvents(&(this->cmdtty),epollfd));
+
   return true;
 }
 
@@ -574,15 +642,7 @@ cmdRegisterProcessEvents(cmd_t *this, int epollfd)
       perror("epoll_ctl: this->pidfd");
       return false;
     }
-  }
-
-  // 2) Register for io events from this command's process via its dom
-  //    cmdtty.
-  //   (eg. let's us know when the command process has produced data on 
-  //        its standard output or standard error streams via cmd's sub tty)
-  //   event descriptor was setup at the time we created the cmdtty
-  assert(ttyRegisterEvents(&(this->cmdtty),epollfd));
-    
+  }    
   return true;
 }
 
