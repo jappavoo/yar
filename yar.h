@@ -136,6 +136,7 @@ typedef struct {
                               // within a line (max line size is CMD_BUF_SIZE).
   bool   prefixbcst;          // prefix writes to broadcast from cmd with cmd
                               // name
+  bool   bcstflg;             // create a broadcast tty
   int    verbose;             // verbosity level 
 } globals_t;
 

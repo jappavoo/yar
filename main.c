@@ -12,6 +12,7 @@ globals_t GBLS = {
   .cmds             = NULL,
   .linebufferbcst   = false,
   .prefixbcst       = false,
+  .bcstflg          = false,
   .defaultcmddelay  = 0.0
 };
 
@@ -221,7 +222,11 @@ argsParse(int argc, char **argv)
     usage(argv[0]);
     return false;
   }
-  
+
+  // we create a broadcast if there is more than
+  // one cmd.
+  if (anum>1) GBLS.bcstflg=true;
+    
   for (int i=0; i<anum; i++) {
     VLPRINT(3, "args[%d]=%s\n", i, args[i]);
     if (!GBLSAddCmd(args[i])) {
@@ -373,7 +378,7 @@ theLoop()
   }
 
   // register for the broadcast client interface events
-  ttyRegisterEvents(&(GBLS.bcsttty), epollfd);
+  if (GBLS.bcstflg) ttyRegisterEvents(&(GBLS.bcsttty), epollfd);
 
   
   // cmd now register for events when started as part of lazy start
@@ -430,7 +435,7 @@ extern
 void cleanup(void)
 {
   VPRINT("%s", "exiting\n");
-  ttyCleanup(&GBLS.bcsttty);
+  if (GBLS.bcstflg) ttyCleanup(&GBLS.bcsttty);
   {
     cmd_t *cmd, *tmp;
     HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
@@ -464,7 +469,7 @@ int main(int argc, char **argv)
   if (!argsParse(argc, argv)) EEXIT();
 
   // create the broadcast tty
-  {
+  if (GBLS.bcstflg) {
     evntdesc_t ed  = { .obj = &(GBLS.bcsttty), .hdlr = bcstttyEvent };
     evntdesc_t ned = { .obj = &(GBLS.bcsttty), .hdlr = bcstttyNotify };
     if (!ttyCreate(&GBLS.bcsttty, ed, ned, true)) EEXIT();

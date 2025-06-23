@@ -53,7 +53,6 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
     VLPRINT(2, "%p: read returned 0\n", this);
     NYI;
   } else if (n==1)  {
-    
     if (evnts && verbose(2)) {
       asciistr_t charstr;
       ascii_char2str(c, charstr);
@@ -76,84 +75,86 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
     written = ttyWriteChar(&(this->clttty), c, NULL); // write data to clt tty
     if (written != 1) NYI;
     n = written;
-    if (!GBLS.linebufferbcst) { 
-      written = ttyWriteChar(&GBLS.bcsttty, c, NULL); // write data to bcst tty
-      if (written != 1) NYI;
-      n += written;
-    } else {
-      if (cmdbufNtoI(this->bufn) == cmdbufNtoI(this->bufstart)) {
-	this->bufof++; // buffer just wrapped
-	EPRINT("cmd:%s line overflowed output buffer: start:%zu m:%zu of:%d\n",
-	       this->name, this->bufstart, this->bufn, this->bufof);
-      }
-      if (c=='\n') {
-	// Write cmd prefix to tty if enabled
-	if (GBLS.prefixbcst && this->bcstprefix && this->bcstprefixlen > 0) {
-	  written = ttyWriteBuf(&GBLS.bcsttty, this->bcstprefix,
-				this->bcstprefixlen,
-		      NULL);
-	  assert(written == this->bcstprefixlen);
-	  // we don't include prefix in count of data written to the tty
+    if (GBLS.bcstflg) {
+      if (!GBLS.linebufferbcst) { 
+	written = ttyWriteChar(&GBLS.bcsttty, c, NULL); //write data to bcst tty
+	if (written != 1) NYI;
+	n += written;
+      } else {
+	if (cmdbufNtoI(this->bufn) == cmdbufNtoI(this->bufstart)) {
+	  this->bufof++; // buffer just wrapped
+	  EPRINT("cmd:%s line overflowed output buffer: start:%zu m:%zu of:%d\n",
+		 this->name, this->bufstart, this->bufn, this->bufof);
 	}
-	int len;
-	int end = i;          // end of line is last location we put data
-	if (this->bufof==0) {
-	  // Handle no over flow cases -> buffer holds a complete line 
-	  int start = cmdbufNtoI(this->bufstart);
-	  if (start <= end) {
-	    // Line does not wrap the buffer (end is >= start)
-	    len = (end - start) + 1;
-	    written = ttyWriteBuf(&GBLS.bcsttty,
-				  (char *)&(this->buf[start]),
-				  len,           
+	if (c=='\n') {
+	  // Write cmd prefix to tty if enabled
+	  if (GBLS.prefixbcst && this->bcstprefix && this->bcstprefixlen > 0) {
+	    written = ttyWriteBuf(&GBLS.bcsttty, this->bcstprefix,
+				  this->bcstprefixlen,
 				  NULL);
-	    assert(written == len);
-	    n += written;
+	    assert(written == this->bcstprefixlen);
+	    // we don't include prefix in count of data written to the tty
+	  }
+	  int len;
+	  int end = i;          // end of line is last location we put data
+	  if (this->bufof==0) {
+	    // Handle no over flow cases -> buffer holds a complete line 
+	    int start = cmdbufNtoI(this->bufstart);
+	    if (start <= end) {
+	      // Line does not wrap the buffer (end is >= start)
+	      len = (end - start) + 1;
+	      written = ttyWriteBuf(&GBLS.bcsttty,
+				    (char *)&(this->buf[start]),
+				    len,           
+				    NULL);
+	      assert(written == len);
+	      n += written;
+	    } else {
+	      // Line wraps across end of the buffer (no overflow and start > end) 
+	      // Requires two writes: 
+	      //   1. beginning of the line is from start to buffer end
+	      len = cmdbufSize - start;
+	      ASSERT(len>=1);
+	      written= ttyWriteBuf(&GBLS.bcsttty,
+				   (char *)&(this->buf[start]),
+				   len,
+				   NULL);
+	      assert(written == len);
+	      n += written;
+	      //   2. end of the line is from buffer start to end
+	      len = end + 1;
+	      written = ttyWriteBuf(&GBLS.bcsttty,
+				    (char *)&(this->buf[0]),
+				    len,
+				    NULL);
+	      assert(written == len);
+	      n += written;
+	    }
 	  } else {
-	    // Line wraps across end of the buffer (no overflow and start > end) 
-	    // Requires two writes: 
-	    //   1. beginning of the line is from start to buffer end
-	    len = cmdbufSize - start;
-	    ASSERT(len>=1);
-	    written= ttyWriteBuf(&GBLS.bcsttty,
-				 (char *)&(this->buf[start]),
-				 len,
-				 NULL);
-	    assert(written == len);
-	    n += written;
-	    //   2. end of the line is from buffer start to end
-	    len = end + 1;
-	    written = ttyWriteBuf(&GBLS.bcsttty,
+	    // handle overflow cases
+	    //  start is irrelevant last bufsize bytes written are from
+	    //  end+1 to bufend and 0 to end
+	    if ( (end+1) < cmdbufSize ) {
+	      len = cmdbufSize - (end+1);
+	      written = ttyWriteBuf(&(GBLS.bcsttty),
+				    (char *)&(this->buf[end+1]),
+				    len,
+				    NULL);
+	      assert(len == written);
+	      n += written;
+	    }
+	  // given wrap data is from 0  to end
+	    len = end+1;
+	    written = ttyWriteBuf(&(GBLS.bcsttty),
 				  (char *)&(this->buf[0]),
 				  len,
 				  NULL);
 	    assert(written == len);
 	    n += written;
+	    this->bufof = 0;            // reset overflow count
 	  }
-	} else {
-	  // handle overflow cases
-	  //  start is irrelevant last bufsize bytes written are from
-	  //  end+1 to bufend and 0 to end
-	  if ( (end+1) < cmdbufSize ) {
-	    len = cmdbufSize - (end+1);
-	    written = ttyWriteBuf(&(GBLS.bcsttty),
-			     (char *)&(this->buf[end+1]),
-			     len,
-			     NULL);
-	    assert(len == written);
-	    n += written;
-	  }
-	  // given wrapp data is from 0  to end
-	  len = end+1;
-	  written = ttyWriteBuf(&(GBLS.bcsttty),
-			   (char *)&(this->buf[0]),
-			   len,
-			   NULL);
-	  assert(written == len);
-	  n += written;
-	  this->bufof = 0;            // reset overflow count
+	  this->bufstart = this->bufn;  // record start location of next line
 	}
-	this->bufstart = this->bufn;  // record start location of next line
       }
     }
     if (evnts && verbose(2)) {
