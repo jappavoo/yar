@@ -32,6 +32,7 @@
 
 #define NSEC_IN_SECOND 1000000000
 #define CMD_BUFSIZE 4096
+#define MON_LINELEN 4096
 #define TTY_MAX_PATH 256
 #define DEFAULT_CMD_DELAY 0.0
 #define CLOCK_SOURCE CLOCK_MONOTONIC
@@ -42,9 +43,18 @@ typedef enum {
   EVNT_HDLR_EXIT_LOOP=1 } evnthdlrrc_t;
 typedef  evnthdlrrc_t (* evnthdlr_t)(void *, uint32_t, int);
 typedef struct {
-  evnthdlr_t hdlr;
-  void *obj;
+  evnthdlr_t  hdlr;
+  void       *obj;
 } evntdesc_t;
+
+// Monitor Object
+//  Provides a line oriented control interface to the yar process
+//  
+typedef struct monitor {
+  char       line[MON_LINELEN];
+  evntdesc_t ed;
+  int        n; 
+} mon_t;
 
 // TTY Object
 // Uses a UNIX PTY pair of ttys, dom-tty (aka master in traditional UNIX lingo)
@@ -106,6 +116,7 @@ typedef struct  {
                               // clients
   evntdesc_t pidfded;         // pidfd event descriptor  
   struct timespec lastwrite;  // timestamp of last write
+  char   *cmdstr;              // pointer if space allocated for cmd str  
   char   *name;               // user defined name (link is by default name)
   char   *bcstprefix;         // prefix to use if enabled 
   char   *cmdline;            // shell command line of command  
@@ -122,6 +133,7 @@ typedef struct  {
 } cmd_t;
 
 typedef struct {
+  mon_t mon;                  // monitor object: control interface to yar
   cmd_t *cmds;                // hashtable of cmds
   cmd_t *slowestcmd;          // pointer to the slowest cmd so that we can pace
                               // broadcast tty reads based on this command
@@ -131,12 +143,14 @@ typedef struct {
                               // buffer in the kernel tty port 
   tty_t  bcsttty;             // broadcast tty
   double defaultcmddelay;     // default value for sending data to commands
+  double restartcmddelay;     // delay restarting command if exited with success
+  double errrestartcmddelay;  // delay restarting command if exited with failure
   bool   linebufferbcst;      // if true output from commands sent to broadcast
                               // tty will be line buffered to avoid interleaving
                               // within a line (max line size is CMD_BUF_SIZE).
   bool   prefixbcst;          // prefix writes to broadcast from cmd with cmd
                               // name
-  bool   bcstflg;             // create a broadcast tty
+  bool   bcstflg;             // create a broadcast tty  
   int    verbose;             // verbosity level 
 } globals_t;
 
@@ -191,6 +205,8 @@ ascii_char2str(int c, asciistr_t str)
 }
 
 extern void fdSetnonblocking(int fd);
+
+extern void delaysec(double delay);
 
 #define NYI { fprintf(stderr, "%s: %d: NYI\n", __func__, __LINE__); assert(0); }
 

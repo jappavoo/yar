@@ -185,8 +185,10 @@ cmdttyDrain(cmd_t *this)
 static evnthdlrrc_t
 cmdPidEvent(void *obj, uint32_t evnts, int epollfd)
 {
-  cmd_t *this = obj;
-  int      fd = this->pidfd;
+  cmd_t       *this = obj;
+  int            fd = this->pidfd;
+  double startdelay = 0.0;
+  
   if (verbose(2)) {
     cmdDump(this, stderr, "pidEvent on:\n  ");
   }
@@ -215,7 +217,9 @@ cmdPidEvent(void *obj, uint32_t evnts, int epollfd)
     this->pid   = -1;
 
     // restart
-    assert(cmdStart(this, true, epollfd));
+    if (this->exitstatus == 0) startdelay=GBLS.restartcmddelay;
+    else startdelay=GBLS.errrestartcmddelay;
+    assert(cmdStart(this, true, epollfd, startdelay));
     VPRINT("%s: restarted pid:%d\n", this->name, this->pid);
     
     evnts = evnts & ~EPOLLIN;
@@ -373,7 +377,7 @@ cmdCltttyNotify(void *obj, uint32_t mask, int epollfd)
 	      this->cmdtty.link, this->cmdtty.path,
 	      this->cmdtty.opens);
     }
-    if (cmdStart(this, true, epollfd)) {
+    if (cmdStart(this, true, epollfd,0.0)) {
       VPRINT("%s started pidfd=%d pid=%d\n", this->name, this->pidfd, this->pid);
     }
     mask = mask & ~IN_OPEN;
@@ -410,13 +414,13 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
   ascii_char2str(i, charstr);
   
   fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
-	  "    cmdline=\"%s\" \n    bcstprefix=\"%s\"(len=%d)"
+	  "    cmdstr=\"%s\"\n    cmdline=\"%s\"\n    bcstprefix=\"%s\"(len=%d)"
 	  " delay=%f log=%s bufn=%lu bufstart=%lu bufof=%d "
 	  "lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n"
 	  , prefix, this,
 	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
-	  this->cmdline, this->bcstprefix, this->bcstprefixlen, this->delay,
-	  this->log, this->bufn, this->bufstart, this->bufof,
+	  this->cmdstr, this->cmdline, this->bcstprefix, this->bcstprefixlen,
+	  this->delay, this->log, this->bufn, this->bufstart, this->bufof,
 	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
   
   if (this->bufn) {
@@ -436,10 +440,11 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
 }
 
 extern bool
-cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
+cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay, char *ttylink,
 	char *log)
 {
-  assert(name && cmdline); 
+  assert(cmdstr && name && cmdline);
+  this->cmdstr            = cmdstr;
   this->name              = name;
   this->bcstprefixlen     = strlen(name)+2;   // +2 for ": " do no include null
   this->bcstprefix        = malloc(this->bcstprefixlen+1); // +1 for null
@@ -465,7 +470,7 @@ cmdInit(cmd_t *this, char *name, char *cmdline, double delay, char *ttylink,
 // NOTE caller has to register this new process with epoll loop!
 // FIXME: JA: add cmdRegisterPidFd
 extern bool
-cmdStart(cmd_t *this, bool raw, int epollfd)
+cmdStart(cmd_t *this, bool raw, int epollfd, double startdelay)
 {
   pid_t cpid;
   // we expect the cmdtty to be created with both the dom and sub sides
@@ -516,6 +521,13 @@ cmdStart(cmd_t *this, bool raw, int epollfd)
     // from tlpi-dist/pty/script.c
     char *shell = getenv("SHELL");
     if (shell == NULL || *shell == '\0') shell = "/bin/sh";
+
+    if (startdelay>0.0) {
+      // pause for delay seconds before starting (can be a fractionaly value)
+      // this is useful in the case of restarts to trottle
+      // spam command execution
+      delaysec(startdelay);
+    }
     // See system manpage for how this was modelled
     // execute the shell command line as if it were passed via -c eg.
     // $ $SHELL -c '((i=0)); while :; do echo $i:hello; sleep 2; ((i++)); done'
@@ -665,7 +677,7 @@ extern bool
 cmdCleanup(cmd_t *this)
 {
   assert(this);
-  if (verbose>0) {
+  if (verbose(2)) {
     cmdDump(this, stderr, "clean: ");
   }
   
@@ -676,7 +688,12 @@ cmdCleanup(cmd_t *this)
   ttyCleanup(&(this->clttty));
 
   if (this->bcstprefix) {
+    free(this->cmdstr);
     free(this->bcstprefix);
+    this->cmdstr        = NULL;
+    this->name          = NULL;
+    this->cmdline       = NULL;
+    this->log           = NULL;
     this->bcstprefix    = NULL;
     this->bcstprefixlen = 0;
   }

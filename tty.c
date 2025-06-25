@@ -254,7 +254,7 @@ ttyWriteBuf(tty_t *this, char *buf, int len,  struct timespec *ts)
 	if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
 	else fprintf(stderr, "\n");
       }
-  } else {
+    } else {
       // n==0
       EPRINT("write returned unexpected value?? n=%d\n", n);
       NYI;
