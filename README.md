@@ -1,15 +1,41 @@
 # YAR (Yet Another Relay)
 
-Executes a set of commands and provides ways to send and receive 
+Executes a set of command lines and provides ways to send and receive 
 standard input and output to and from them.  
 
 - support simulated broadcast
 - pacing (add's delay between each character sent)
-- restarts commands if they exit
+- restarts commands if they exit (both success and failure)
+- line buffer broadcast output
+- prefixing broadcast output
+- dynamically add and remove command lines
+
+See usage string for the command usage documentation.
+This readme is more about its design and use of ptys.
+
+
+# Motivation
+
+Yar is motivated by out experience with IBM project Kittyhawk.  
+We found that being able to create a broadcast channel to which communciations
+to command oriented processes running on remotes systems was a very powerful
+and scalable primative for controlling them.   Project Kittyhawk used
+broadcast capabilities the Bluegeen Tree Network to create a "broadcast"
+tty abstraction.  
+
+Yar builds on the above idea but generalizes it to creating a "channel" 
+represented by a broadcast tty to which an arbitrary set of processes
+can be connected to.  The process are specified as shell command lines.
+Currently, Yar must serially write and reads data from the process.  However,
+the process are running in parallel so while to time to write data grows
+with the number of processes attached to the channel the processes themselves
+will proceed in parallel to read and operate on the data they receive.
+
 
 
 # Design
 
+<pre>
 yar 'cmd0,,,,socat - tcp:x.x.x.x:42' 'cmd1,,,,ssh foo@x.x.x.x' 
   
                               Yar Process
@@ -39,15 +65,13 @@ fd   tty      fd  tty                            ptsC -> ./cmd0
  0 ptsB       0  ptsD                            ptsE -> ./cmd1
  1 ptsB       1  ptsD
  2 ptsB       2  ptsD
+</pre>
 
-Need to explicity close all other 
-fds and decide what to do about
-who is the session leader
-and the controlling tty
+Must decide what to do about who is the session leader and the controlling tty
 
 
 
-# tty and pty semantics 
+# Development notes on tty and pty semantics 
 
 ## References
 
