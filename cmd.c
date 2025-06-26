@@ -38,6 +38,7 @@ int fcntl(int fd, int cmd, ... /* arg */ );
 #define cmdbufDataEnd(n)   ( cmdbufWrapped(n) ? cmdbufNtoI(n)-1 : n-1 )
 
 // MISC
+// NYI: FYI: logging not yet implemented
 static int
 cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
 {
@@ -440,9 +441,10 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
 }
 
 extern bool
-cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay, char *ttylink,
-	char *log)
+cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
+	char *ttylink, char *log)
 {
+  if (log != NULL) NYI;             // need to open log and add write to it ;-)
   assert(cmdstr && name && cmdline);
   this->cmdstr            = cmdstr;
   this->name              = name;

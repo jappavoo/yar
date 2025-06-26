@@ -46,6 +46,7 @@ typedef struct {
   evnthdlr_t  hdlr;
   void       *obj;
 } evntdesc_t;
+typedef int (*moncmd_t)(int,int);
 
 // Monitor Object
 //  Provides a line oriented control interface to the yar process
@@ -207,6 +208,8 @@ ascii_char2str(int c, asciistr_t str)
 extern void fdSetnonblocking(int fd);
 
 extern void delaysec(double delay);
+
+
 
 #define NYI { fprintf(stderr, "%s: %d: NYI\n", __func__, __LINE__); assert(0); }
 
