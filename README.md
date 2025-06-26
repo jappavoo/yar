@@ -18,12 +18,8 @@ This readme is more about its design and use of ptys.
 
 # Build Notes
 
-Assume Linux and a working install of `gcc` and `make`. As part 
-of its build it will fetch two external repos for code it depends
-on and build these:
-
-- `uthash` : from git@github.com:troydhanson/uthash.git
-- `libtlpi`: from https://man7.org/tlpi/code/download/tlpi-241221-dist.tar.gz
+Assumes Linux and a working install of `gcc` and `make`, and 
+internet connection.
 
 To build the `yar` executable all you should have to do is
 <pre>
@@ -31,6 +27,12 @@ To build the `yar` executable all you should have to do is
   $ cd yar
   $ make
 </pre>
+
+As part of the build the following two external repos will be fetched and built:
+
+- `uthash` : from git@github.com:troydhanson/uthash.git
+- `libtlpi`: from https://man7.org/tlpi/code/download/tlpi-241221-dist.tar.gz
+
 
 # Motivation
 
