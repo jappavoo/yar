@@ -8,7 +8,7 @@ standard input and output to and from them.
 - restarts commands if they exit (both success and failure)
 - line buffer broadcast output
 - prefixing broadcast output
-- dynamically add and remove command lines
+- dynamically add and remove command lines via a simple monitor interface
 
 See usage string for the command usage documentation.
 This readme is more about its design and use of ptys.
