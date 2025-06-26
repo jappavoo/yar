@@ -19,18 +19,53 @@ This readme is more about its design and use of ptys.
 Yar is motivated by out experience with IBM project Kittyhawk.  
 We found that being able to create a broadcast channel to which communciations
 to command oriented processes running on remotes systems was a very powerful
-and scalable primative for controlling them.   Project Kittyhawk used
-broadcast capabilities the Bluegeen Tree Network to create a "broadcast"
-tty abstraction.  
+and scalable primative.   Project Kittyhawk used
+broadcast capabilities of the Bluegene Collective Network to create a "broadcast"
+tty abstraction for which we added driver support for to Linux and u-boot.
+This allowed us to efficiently, in parallel, send/scatter a "command" and receive
+results  back from hundreds of nodes at once.  This ability effecively 
+turns the a commanline interface such as bash into a parallel programming 
+environment.  Eg. Assuming that `./wrks` is a tty on a control system
+where we interactively can run commands that read and write to it. 
+Critically, `./wrks` to connected to broadcast channel on which 
+128 "worker" systems are attached (via a local tty) and on which each
+worker is running `bash` processes who's standard input, output and error
+are directed.  As such all the input and output to these `bash` processes
+come from and go to the broadcast channel.  One can then use the `./wrks`
+tty on the contol system to do fun things ;-)
 
-Yar builds on the above idea but generalizes it to creating a "channel" 
-represented by a broadcast tty to which an arbitrary set of processes
+<pre>
+   $ cat ./wrks > /tmp/wrks.output & pid=$!
+   $ echo 'insmod foo; lsmod | grep foo; echo -e "\n@DONE@: $MYNODEID"' > wrks
+   $ waitfor '@DONE@' 128 /tmp/wrks.output; kill $pid
+</pre>
+
+The above assumes that the bash running on each node has a enviornment 
+`MYNODEID` which is set to the systems channel rank (an integer from 0,127) 
+that uniquely identifies the node.  Similarly it assumes that a program
+that can monitor the contents of a file (/tmp/wrks.output) for the occurance
+of a regex (in this case the `@DONE@`) some number of time (128).
+
+Similarly
+<pre>
+  $ cat ./wrks > /tmp/wrks.output & pid=$!
+  $ echo '{ (( MYNODEID > 12 && MYNODED <= 16)) && ip -o -4 addr; } && echo @DONE@' > ./wrks 
+  $ waitfor 4 '@DONE@' /tmp/wrks.output; kill $pid
+</pre>
+
+Or one can even use the broadcast tty to interactively work with all the nodes
+<pre>
+  $ socat - ./wrks
+</pre>
+
+Yar builds on the above idea but attempts to  generalizes it to creating a 
+"channel" represented by a broadcast tty to which an arbitrary set of processes
 can be connected to.  The process are specified as shell command lines.
-Currently, Yar must serially write and reads data from the process.  However,
-the process are running in parallel so while to time to write data grows
+Currently, Yar must serially write and reads data from the processes.  However,
+the process are running in parallel so while the time to write data grows
 with the number of processes attached to the channel the processes themselves
-will proceed in parallel to read and operate on the data they receive.
-
+will proceed in parallel to read and operate on the data they receive and write
+data back to the channel.
 
 
 # Design
