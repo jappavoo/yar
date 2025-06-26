@@ -3,9 +3,6 @@ OBJS       := $(SRCS:%.c=%.o)
 O          :=0
 CFLAGS     += -g -O${O} -std=gnu99 -MD -MP -Wall -Werror
 TARGETS    := yar
-TSCLOGREPO := git@github.com:jappavoo/tsclog.git
-TSCLOGDIR  := ext/tsclog
-TSCLOGINCS  = ${TSCLOGDIR}
 UTHASHREPO := git@github.com:troydhanson/uthash.git
 UTHASHDIR  := ext/uthash
 UTHASHINCS  = ${UTHASHDIR}/include
@@ -16,14 +13,14 @@ TLPIINCS    = ${TLPIDIR}
 TLPILIBDIR  = ${TLPIDIR}
 TLPILIB     = tlpi
 
-CFLAGS     += -I${UTHASHINCS} -I${TSCLOGINCS} -I${TLPIINCS}
+CFLAGS     += -I${UTHASHINCS} -I${TLPIINCS}
 ifeq ($(wildcard /usr/include/sys/pidfd.h),)
 	CFLAGS += -DNOSYSPIDFD
 endif
 
 
 LDFLAGS    += -L${TLPILIBDIR} -l${TLPILIB}
-EXTFILES    = ${TSCLOGINCS}/now.h ${UTHASHINCS}/uthash.h \
+EXTFILES    = ${UTHASHINCS}/uthash.h \
 	${TLPIDIR}/lib${TLPILIB}.a
 
 .PHONY: clean 
@@ -35,9 +32,6 @@ all: ${EXTFILES} ${TARGETS} ${FUNCSOS}
 
 yar: ${OBJS}
 	${CC} ${CFLAGS} -o $@ $^ ${LDFLAGS} 
-
-${TSCLOGINCS}/now.h:
-	-mkdir -p ext/tsclog && git clone ${TSCLOGREPO} ${TSCLOGDIR}
 
 ${UTHASHINCS}/uthash.h:
 	-mkdir -p ext && git clone ${UTHASHREPO} ${UTHASHDIR}

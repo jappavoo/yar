@@ -8,11 +8,29 @@ standard input and output to and from them.
 - restarts commands if they exit (both success and failure)
 - line buffer broadcast output
 - prefixing broadcast output
-- dynamically add and remove command lines via a simple monitor interface
+- dynamically add and remove command lines via a simple monitor interfacee
 
-See usage string for the command usage documentation.
+See usage string for the command usage documentation. Eg.
+<pre>
+  $ ./yar -h
+</pre>
 This readme is more about its design and use of ptys.
 
+# Build Notes
+
+Assume Linux and a working install of `gcc` and `make`. As part 
+of its build it will fetch two external repos for code it depends
+on and build these:
+
+- `uthash` : from git@github.com:troydhanson/uthash.git
+- `libtlpi`: from https://man7.org/tlpi/code/download/tlpi-241221-dist.tar.gz
+
+To build the `yar` executable all you should have to do is
+<pre>
+  $ git clone git@github.com:jappavoo/yar.git
+  $ cd yar
+  $ make
+</pre>
 
 # Motivation
 
