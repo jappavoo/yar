@@ -11,7 +11,8 @@ static evnthdlrrc_t monEvent(void *obj, uint32_t evnts, int epollfd);
 
 globals_t GBLS = {
   .mon                = { .ed = {.obj = &(GBLS.mon), .hdlr = &monEvent },
-			  .n = 0 }, 
+			  .n = 0 },
+  .stopstr            = NULL,
   .slowestcmd         = NULL,
   .verbose            = 0,
   .cmds               = NULL,
@@ -256,8 +257,10 @@ usage(char *name)
 	  "    written to the broadcast tty will be line buffered.\n"
 	  " -p enable prefixing the output from commands written to the\n"
 	  "    broadcast tty with the specified name for the command.\n"
-	  "  -v increase debug message verbosity.  This option can be used\n"
-	  "     multiple times to the verbosity Eg. -v versus -vv etc.\n"
+	  " -s <string> this sting will be sent to the command line when\n"
+	  "    stopping it.  If specified a newline will always be prepended.\n"
+	  " -v increase debug message verbosity.  This option can be used\n"
+	  "    multiple times to the verbosity Eg. -v versus -vv etc.\n"
 	  "Monitor: In addition to controlling 'yar' via its command line arguments\n"
 	  "'yar' provides a simple monitoring interface on its standard input\n"
 	  "and output. The interface provides a set of monitor commands that\n"
@@ -272,6 +275,7 @@ static void
 GBLSDump(FILE *f)
 {
   fprintf(f, "GBLS.verbose=%d\n", GBLS.verbose);
+  fprintf(f, "GBLS.stopstr=%s\n", GBLS.stopstr);
   fprintf(f, "GBLS.defaultcmddelay=%f\n", GBLS.defaultcmddelay);
   fprintf(f, "GBLS.restartcmddelay=%f\n", GBLS.restartcmddelay);
   fprintf(f, "GBLS.errrestartcmddelay=%f\n", GBLS.errrestartcmddelay);
@@ -441,7 +445,7 @@ argsParse(int argc, char **argv)
 {
     int opt;
     
-    while ((opt = getopt(argc, argv, "b:d:e:hlpr:v")) != -1) {
+    while ((opt = getopt(argc, argv, "b:d:e:hlpr:s:v")) != -1) {
     switch (opt) {
     case 'b':
       GBLS.bcsttty.link=optarg;
@@ -478,7 +482,10 @@ argsParse(int argc, char **argv)
 	perror("bad restart error delay value");
 	return  false;
       }
-      break;      
+      break;
+    case  's':
+      GBLS.stopstr = optarg;
+      break;
     case 'v':
       GBLS.verbose++;
       break;

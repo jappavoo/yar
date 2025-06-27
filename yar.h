@@ -122,6 +122,8 @@ typedef struct  {
   char   *bcstprefix;         // prefix to use if enabled 
   char   *cmdline;            // shell command line of command  
   char   *log;                // path to log (copy of all data written and read)
+  char   *stopstr;            // string to send when stopping takes precedence over
+                              // GBLS.stopstr
   double  delay;              // time between writes
   pid_t   pid;                // process id of running command
   size_t  bufn;               // number of bytes buffered [0..SIZE_MAX]
@@ -143,7 +145,8 @@ typedef struct {
                               // this approach avoids us having to implement
                               // our own write buffering to delay writes
                               // rather we pace reads and let the data
-                              // buffer in the kernel tty port 
+                              // buffer in the kernel tty port
+  char  *stopstr;             // a string to send to a command line when stopping
   tty_t  bcsttty;             // broadcast tty
   double defaultcmddelay;     // default value for sending data to commands
   double restartcmddelay;     // delay restarting command if exited with success

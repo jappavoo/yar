@@ -440,13 +440,13 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
   ascii_char2str(i, charstr);
   
   fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
-	  "    restart=%d restartcnt=%d deleteonexit=%d\n"
+	  "    restart=%d restartcnt=%d deleteonexit=%d\n    stopstr=\"%s\"\n"
 	  "    cmdstr=\"%s\"\n    cmdline=\"%s\"\n    bcstprefix=\"%s\"(len=%d)"
 	  " delay=%f log=%s bufn=%lu bufstart=%lu bufof=%d "
 	  "lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n"
 	  , prefix, this,
 	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
-	  this->restart, this->restartcnt, this->deleteonexit, 
+	  this->restart, this->restartcnt, this->deleteonexit, this->stopstr,
 	  this->cmdstr, this->cmdline, this->bcstprefix, this->bcstprefixlen,
 	  this->delay, this->log, this->bufn, this->bufstart, this->bufof,
 	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
@@ -474,6 +474,7 @@ cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
   if (log != NULL) NYI;             // need to open log and add write to it ;-)
   assert(cmdstr && name && cmdline);
   this->cmdstr            = cmdstr;
+  this->stopstr           = NULL;
   this->name              = name;
   this->bcstprefixlen     = strlen(name)+2;   // +2 for ": " do no include null
   this->bcstprefix        = malloc(this->bcstprefixlen+1); // +1 for null
@@ -590,6 +591,32 @@ cmdStop(cmd_t *this, int epollfd, bool force)
     return false;
   }
 
+  // send stop string if there is one
+  {
+    char *cptr=NULL;
+    if (this->stopstr) cptr=this->stopstr;
+    else if (GBLS.stopstr) cptr=GBLS.stopstr;
+    if (cptr) {
+      // always send a newline first (motivated by ipmitool semantics)
+      int n=cmdWriteChar(this,'\n');
+      if ( n != 1 ) {
+	EPRINT("  write returned: n=%d\n", n);
+	NYI;
+      }      
+      for (; *cptr; cptr++) {
+	int n=cmdWriteChar(this,*cptr);
+	if ( n != 1 ) {
+	  EPRINT("  write returned: n=%d\n", n);
+	  NYI;
+	}
+	// hack use 
+	delaysec(this->delay);
+      }
+    }
+    VPRINT("stopstr: sent: \\n%s\n",
+	   (this->stopstr) ? this->stopstr : GBLS.stopstr);
+  }
+  
   // remove cmd pidfd from epoll as we know we are stopping it
   if (epollfd != -1) {
     struct epoll_event dummyev;
