@@ -217,11 +217,36 @@ cmdPidEvent(void *obj, uint32_t evnts, int epollfd)
     this->pidfd = -1;
     this->pid   = -1;
 
-    // restart
-    if (this->exitstatus == 0) startdelay=GBLS.restartcmddelay;
-    else startdelay=GBLS.errrestartcmddelay;
-    assert(cmdStart(this, true, epollfd, startdelay));
-    VPRINT("%s: restarted pid:%d\n", this->name, this->pid);
+    // cleanup on exit logic (takes precedence)
+    if (this->deleteonexit) {
+      VPRINT("%s: pid:%d cleaning up on exit status:%d\n",
+	     this->name, this->pid,  this->exitstatus); 
+      cmd_t *cmd=NULL;
+      HASH_FIND_STR(GBLS.cmds, this->name, cmd);
+      cmdCleanup(this);
+      if (cmd != NULL) {
+	ASSERT(this==cmd);
+	HASH_DEL(GBLS.cmds, cmd);
+	free(cmd);
+	if (HASH_COUNT(GBLS.cmds) == 0 && GBLS.exitonidle) {
+	  cleanup();
+	  exit(EXIT_SUCCESS);
+	}
+      }
+      goto done;
+    } 
+    
+    // restart on exit logic
+    // global restart behavior takes precedent but a command can
+    // be forced not to restart if needed 
+    if (GBLS.restart && this->restart) {
+      if (this->exitstatus == 0) startdelay=GBLS.restartcmddelay;
+      else startdelay=GBLS.errrestartcmddelay;
+      assert(cmdStart(this, true, epollfd, startdelay));
+      this->restartcnt++;
+      VPRINT("%s: restarted pid:%d restartcnt:%d\n",
+	     this->name, this->pid, this->restartcnt);
+    }
     
     evnts = evnts & ~EPOLLIN;
     if (evnts==0) goto done;
@@ -415,11 +440,13 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
   ascii_char2str(i, charstr);
   
   fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
+	  "    restart=%d restartcnt=%d deleteonexit=%d\n"
 	  "    cmdstr=\"%s\"\n    cmdline=\"%s\"\n    bcstprefix=\"%s\"(len=%d)"
 	  " delay=%f log=%s bufn=%lu bufstart=%lu bufof=%d "
 	  "lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n"
 	  , prefix, this,
 	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
+	  this->restart, this->restartcnt, this->deleteonexit, 
 	  this->cmdstr, this->cmdline, this->bcstprefix, this->bcstprefixlen,
 	  this->delay, this->log, this->bufn, this->bufstart, this->bufof,
 	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
@@ -460,7 +487,9 @@ cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
   this->pid               = -1;
   this->pidfd             = -1;
   this->exitstatus        = -1;
-  this->retry             = true;
+  this->restartcnt        = 0;
+  this->restart           = true;           
+  this->deleteonexit      = GBLS.exitonidle; 
   this->lastwrite.tv_sec  = 0;
   this->lastwrite.tv_nsec = 0;
   this->pidfded           = (evntdesc_t){ NULL, NULL };

@@ -130,7 +130,9 @@ typedef struct  {
   int     bcstprefixlen;      // length of prefix without null;
   int     pidfd;              // pid fd to monitor for termination
   int     exitstatus;         // exit status if command terminates
-  bool    retry;              // retry if exit
+  int     restartcnt;         // count of restarts
+  bool    restart;            // restart this command if it exits
+  bool    deleteonexit;       // delete this command if it exits 
 } cmd_t;
 
 typedef struct {
@@ -151,7 +153,9 @@ typedef struct {
                               // within a line (max line size is CMD_BUF_SIZE).
   bool   prefixbcst;          // prefix writes to broadcast from cmd with cmd
                               // name
-  bool   bcstflg;             // create a broadcast tty  
+  bool   bcstflg;             // create a broadcast tty
+  bool   restart;             // globally controls if commands should be retarted
+  bool   exitonidle;          // exit if all commands are removed
   int    verbose;             // verbosity level 
 } globals_t;
 

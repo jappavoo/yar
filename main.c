@@ -18,6 +18,8 @@ globals_t GBLS = {
   .linebufferbcst     = false,
   .prefixbcst         = false,
   .bcstflg            = false,
+  .restart            = true,
+  .exitonidle         = false,
   .defaultcmddelay    = 0.0,
   .restartcmddelay    = 0.0,
   .errrestartcmddelay = 10.0
@@ -25,8 +27,16 @@ globals_t GBLS = {
 
 static int monExit(int, int);
 static int monAdd(int, int);
+static int monIdleExit(int, int);
 static int monDel(int, int);
 static int monList(int, int);
+static int monToggleRestart(int, int) {
+  GBLS.restart = !GBLS.restart;
+  if (GBLS.restart) fprintf(stderr, "global restart commands: "
+				   "true\n");
+  else fprintf(stderr, "global restart commands: false\n");
+  return 0;
+}
 static int monToggleLB(int, int) {
   GBLS.linebufferbcst = !GBLS.linebufferbcst;
   if (GBLS.linebufferbcst) fprintf(stderr, "line buffer broadcast output: "
@@ -70,18 +80,25 @@ struct MonCmdDesc {
                           "\t\t<name>",
    .cmd=monDel },
   {.name = "d",  .usage=NULL, .cmd=monDel },
-  {.name = "list", .usage="list current command line instances",
+  {.name = "list", .usage="[-l|-d] list current command line instances.\n"
+                          "\t\t-l long listing, -d debug dump.",
    .cmd=monList },
   {.name = "l", .usage=NULL, .cmd=monList },
   {.name = "exit", .usage="exit yar",
    .cmd=monExit },
   {.name = "e", .usage=NULL, .cmd=monExit },
+  {.name = "idleexit", .usage="stop command line restarts and exit when command"
+                              " lines terminate",
+   .cmd=monIdleExit },
+  {.name="ie", .usage=NULL, .cmd=monIdleExit },
+  {.name="restart", .usage="toggle restart behavior",
+   .cmd=monToggleRestart },
+  {.name="r", .usage=NULL, .cmd=monToggleRestart },
   {.name = "quit", .usage=NULL, .cmd=monExit },
   {.name = "q", .usage=NULL, .cmd=monExit },
   {.name = "line", .usage="toggle broadcast tty line buffering",
    .cmd = monToggleLB },
-  {.name = "l", .usage=NULL,
-   .cmd = monToggleLB },  
+  {.name = "lb", .usage=NULL, .cmd = monToggleLB },  
   {.name = "pre", .usage="toggle broadcast tty prefixing",
    .cmd = monTogglePrefix },  
   {.name = "p", .usage=NULL,
@@ -258,6 +275,9 @@ GBLSDump(FILE *f)
   fprintf(f, "GBLS.defaultcmddelay=%f\n", GBLS.defaultcmddelay);
   fprintf(f, "GBLS.restartcmddelay=%f\n", GBLS.restartcmddelay);
   fprintf(f, "GBLS.errrestartcmddelay=%f\n", GBLS.errrestartcmddelay);
+  fprintf(f, "GBLS: restart=%d linebufferbst:%d prefixbcst:%d bcstflg:%d "
+	  "exitonidle:%d\n",
+	  GBLS.restart, GBLS.linebufferbcst, GBLS.prefixbcst, GBLS.bcstflg, GBLS.exitonidle);
   ttyDump(&GBLS.bcsttty, stderr, "GBLS.bcsttty: ");
   fprintf(f, "GBLS.cmds:");
   {
@@ -633,6 +653,29 @@ bcstttyCreate() {
 void monGreeting() { fprintf(stderr, "yar> "); }
 
 int
+monIdleExit(int args, int epollfd)
+{
+  VLPRINT(3, "%s:start: args=%d epollfd=%d\n", __func__, args, epollfd);
+  
+  GBLS.exitonidle = true;
+  // if we are idle (no commands) exit  now 
+  if (HASH_COUNT(GBLS.cmds) == 0) {
+    cleanup();
+    exit(EXIT_SUCCESS);
+  } else {
+    // otherwise mark all current commands to delete themselves
+    // if they exit ... last command to exit will also
+    // cleanup yar
+    cmd_t *cmd, *tmp;
+    HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
+      cmd->deleteonexit = true;
+    }
+  }
+  return 0;
+
+  VLPRINT(3, "%s:end: args=%d epollfd=%d\n", __func__, args, epollfd);
+}
+int
 monExit(int args, int epollfd)
 {
   VLPRINT(3, "%s:start: args=%d epollfd=%d\n", __func__, args, epollfd);
@@ -704,17 +747,34 @@ monDel(int args, int epollfd)
   cmdCleanup(cmd);
   HASH_DEL(GBLS.cmds, cmd);
   free(cmd);
-  
+  if (HASH_COUNT(GBLS.cmds) == 0 && GBLS.exitonidle) {
+    cleanup();
+    exit(EXIT_SUCCESS);
+  }
   return 0;
 }
 
 int
 monList(int args, int epollfd)
 {
+  char *flgs=&GBLS.mon.line[args];
   cmd_t *cmd, *tmp;
+  bool lflg=false;
+  bool dflg=false;
+  
+  if (args) {
+    if (strncmp(flgs, "-l", 3)==0) lflg=true;
+    if (strncmp(flgs, "-d", 3)==0) dflg=true;
+  }
+  
   HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-    printf("%s %s %s\n", cmd->name,
-	   cmd->clttty.link, cmd->cmdline);
+    printf("%s", cmd->name);
+    if (lflg) {
+      printf(" tty:%s pid:%d restarts:%d cmdline:%s\n",
+	     cmd->clttty.link, cmd->pid, cmd->restartcnt, cmd->cmdline);
+    } else if (dflg) {
+      cmdDump(cmd, stderr, "\n");
+    } else printf("\n");
   }
   return 0;
 }
