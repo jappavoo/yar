@@ -86,11 +86,37 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
 }
 
 extern bool
+ttySetlink(tty_t *this, char *ttylink)
+{
+  int n;
+  
+  assert(this);
+  
+  if (this->link) free(this->link);
+
+  if (ttylink == NULL) {
+    this->link = NULL;
+    return true;
+  }
+   // WE ASSUME ttylink is a properly null terminated string!
+  n=strlen(ttylink);
+  if (n==0) return false;
+
+  n=n+1; // add one for null termination
+  this->link=malloc(n);
+
+  strncpy(this->link, ttylink, n);
+  assert(this->link[n]==0);
+
+  return true;
+}
+ 
+extern bool
 ttyInit(tty_t *this, char *ttylink)
 {
   // a non null tty link means the tty is a client tty see ttyIsClient in .h
+  ttySetlink(this, ttylink); 
   this->path[0]  =  0;
-  this->link     =  ttylink;
   this->rbytes   =  0;
   this->wbytes   =  0;
   this->delaycnt =  0;
@@ -321,10 +347,15 @@ ttyCleanup(tty_t *this)
   if (this->ifd  != -1 && close(this->ifd) != 0) perror("close tty->ifd");
   if (this->dfd  != -1 && close(this->dfd) != 0) perror("close tty->dfd");
   if (this->sfd  != -1 && close(this->sfd) != 0) perror("close tty->sfd"); 
-  if (this->link != NULL && this->link[0] !=  0 && unlink(this->link) != 0) {
-    perror("unlink tty->link");
+  if (this->link != NULL) {
+    if (this->link[0] != '\0') {
+      if (unlink(this->link) != 0) {
+	perror("unlink tty->link");
+      }
+    }
+    free(this->link);
   }
-  
+  this->link    = NULL;
   this->dfd     = -1;
   this->sfd     = -1;
   this->iwd     = -1;

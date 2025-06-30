@@ -48,15 +48,6 @@ typedef struct {
 } evntdesc_t;
 typedef int (*moncmd_t)(int,int);
 
-// Monitor Object
-//  Provides a line oriented control interface to the yar process
-//  
-typedef struct monitor {
-  char       line[MON_LINELEN];
-  evntdesc_t ed;
-  int        n; 
-} mon_t;
-
 // TTY Object
 // Uses a UNIX PTY pair of ttys, dom-tty (aka master in traditional UNIX lingo)
 // and sub-tty (aka slave in tranditional UNIX lingo), to represent a terminal
@@ -137,8 +128,26 @@ typedef struct  {
   bool    deleteonexit;       // delete this command if it exits 
 } cmd_t;
 
+// Monitor Object
+//  Provides a line oriented control interface to the yar process
+//  
+typedef struct monitor {
+  char        line[MON_LINELEN]; // line buffer
+  tty_t       tty;               // tty used to communicate with monitor clients
+  evntdesc_t  ed;                // event descriptor to receive tty i/o events
+  FILE       *fileptr;           // filepointer for fprintf calls
+  int         n;                 // number of bytes buffered
+  bool        silent;            // silent do produce an output -- no prompt,
+                                 // no monitor command output, no result code
+                                 // and no error messages!
+} mon_t;
+
+// This structs defines all global data structures/variables
+// that can be access from any function/method via the single GBLS instance
+// of this struct
 typedef struct {
-  mon_t mon;                  // monitor object: control interface to yar
+  tty_t  bcsttty;             // broadcast tty
+  mon_t  mon;                 // monitor object: control interface to yar
   cmd_t *cmds;                // hashtable of cmds
   cmd_t *slowestcmd;          // pointer to the slowest cmd so that we can pace
                               // broadcast tty reads based on this command
@@ -147,10 +156,11 @@ typedef struct {
                               // rather we pace reads and let the data
                               // buffer in the kernel tty port
   char  *stopstr;             // a string to send to a command line when stopping
-  tty_t  bcsttty;             // broadcast tty
   double defaultcmddelay;     // default value for sending data to commands
   double restartcmddelay;     // delay restarting command if exited with success
   double errrestartcmddelay;  // delay restarting command if exited with failure
+  pid_t  pid;                 // pid of this yar processs
+  int    verbose;             // verbosity level 
   bool   linebufferbcst;      // if true output from commands sent to broadcast
                               // tty will be line buffered to avoid interleaving
                               // within a line (max line size is CMD_BUF_SIZE).
@@ -159,9 +169,7 @@ typedef struct {
   bool   bcstflg;             // create a broadcast tty
   bool   restart;             // globally controls if commands should be retarted
   bool   exitonidle;          // exit if all commands are removed
-  int    verbose;             // verbosity level 
 } globals_t;
-
 extern globals_t GBLS;
 
 extern void cleanup();

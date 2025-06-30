@@ -467,6 +467,9 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
   ttyDump(&(this->clttty), f, "    clttty: ");
 }
 
+// cmdstr must be allocated by caller and ownership is
+// transferred to the cmd object -- it frees the memory
+// on cleanup
 extern bool
 cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
 	char *ttylink, char *log)
