@@ -918,7 +918,7 @@ monTtyLink(char *link, int n, char *dir)
   } else {
     rc = snprintf(link, n, "%" PRIdMAX ".mon",  (intmax_t)GBLS.pid);    
   }
-  if (rc < 0 || rc >= 1024) {
+  if (rc < 0 || rc >= n) {
     perror("snprintf");
     return false;
   }
@@ -1021,7 +1021,7 @@ argsParse(int argc, char **argv)
 {
     int opt;
     
-    while ((opt = getopt(argc, argv, "b:d:e:hlm:pr:s:v")) != -1) {
+    while ((opt = getopt(argc, argv, "b:d:e:f:hlm:pr:s:v")) != -1) {
     switch (opt) {
     case 'b':
       ttySetlink(&(GBLS.bcsttty), optarg);
@@ -1152,8 +1152,6 @@ int main(int argc, char **argv)
   // create the broadcast tty
   bcstttyCreate();
 
-  monGreeting();
-  
   if (!theLoop()) EEXIT();
   
   return EXIT_SUCCESS;
