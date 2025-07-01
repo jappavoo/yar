@@ -144,16 +144,28 @@ typedef struct monitor {
                                  // and no error messages!
 } mon_t;
 
+#define monprintf(...) if (GBLS.mon.tty.opens != 0 && !GBLS.mon.silent)		\
+    { fprintf(GBLS.mon.fileptr, __VA_ARGS__); fflush(GBLS.mon.fileptr); }
+
 // File System OBject
 //   Provides a file system oriented interface to the yar process
 typedef struct fs {
   struct fuse_args     fuse_args;
   struct fuse_buf      fuse_buf;
-  evntdesc_t           ed;           
+  evntdesc_t           ed;        // event descriptor for theLoop   
   struct fuse_session *fuse_se;
-  char                *mntpt;
+  char                *mntpt;     // mount point 
   int                  fuse_fd;
+  bool                 mkdir;     // true after mkdir of mount point happens
 } fs_t;
+
+typedef struct fs_filedesc  {
+  const char *name;
+  const char *usage;
+  const fuse_ino_t ino;
+} fs_file_t;
+
+extern fs_file_t fs_files[];
 
 // This structs defines all global data structures/variables
 // that can be access from any function/method via the single GBLS instance

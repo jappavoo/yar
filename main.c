@@ -12,11 +12,12 @@ static evnthdlrrc_t monEvent(void *obj, uint32_t evnts, int epollfd);
 
 globals_t GBLS = {
   .mon                = { .ed = {.obj = &(GBLS.mon), .hdlr = &monEvent },
-			  .fileptr = NULL, .n = 0, .silent = true },
+			  .fileptr = NULL, .n = 0, .silent = true },                        
   .fs                 = { .ed = {.obj = NULL, .hdlr = NULL }, 
                           .fuse_args = FUSE_ARGS_INIT(0, NULL),
 			  .fuse_buf = { .mem = NULL },
-			  .fuse_se = NULL, .mntpt = NULL, .fuse_fd = -1 },
+			  .fuse_se = NULL, .mntpt = NULL, .fuse_fd = -1,
+			  .mkdir = false },
   .stopstr            = NULL,
   .slowestcmd         = NULL,
   .verbose            = 0,
@@ -31,9 +32,6 @@ globals_t GBLS = {
   .restartcmddelay    = 5.0,
   .errrestartcmddelay = 10.0
 };
-
-#define monprintf(...) if (GBLS.mon.tty.opens != 0 && !GBLS.mon.silent)		\
-    { fprintf(GBLS.mon.fileptr, __VA_ARGS__); fflush(GBLS.mon.fileptr); }
 
 static int monExit(int, int);
 static int monAdd(int, int);
@@ -128,13 +126,17 @@ struct MonCmdDesc {
 };
 
 static void
-monusage()
+monusage(FILE *fp)
 {
-  if (GBLS.mon.tty.opens == 0) return;
+  if (fp == GBLS.mon.fileptr && GBLS.mon.tty.opens == 0) return;
   for (int i=0; MonCmds[i].cmd != NULL; i++) {
     struct MonCmdDesc *cmd = &(MonCmds[i]);
     if (cmd->usage != NULL) {
-      monprintf( "\t'%s'\t%s\n", cmd->name, cmd->usage);
+      if (fp == GBLS.mon.fileptr) {
+	monprintf( "\t'%s'\t%s\n", cmd->name, cmd->usage);
+      } else {
+	fprintf(fp, "\t'%s'\t%s\n", cmd->name, cmd->usage);
+      }
     }
   }
 }
@@ -285,8 +287,20 @@ usage(char *name, FILE *fp)
   "    stopping it.  If specified a newline will always be prepended.\n"
   " -v increase debug message verbosity.  This option can be used\n"
   "    multiple times to the verbosity Eg. -v versus -vv etc.\n\n"
+
+  "File System: In addition to controlling 'yar' via its command line\n"
+  "arguments, 'yar' provides a file system interface.  Yar will create a\n"
+  "directory named <pid>.fs when it starts the location of this directory\n"
+  "by default will be in the working directory that 'yar' was started in.\n"
+  "use the '-f <dir>' option to explicitly set the location.  In this\n"
+  "in this directory you will find files that let you interact with the 'yar'\n"
+	  "process.  The folling documents after the files.\n",
+	  	  name, DEFAULT_BCSTTTY_LINK,
+	  GBLS.defaultcmddelay, GBLS.restartcmddelay, GBLS.errrestartcmddelay);
+  fsusage(fp);
 	  
-  "Monitor: In addition to controlling 'yar' via its command line arguments\n"
+  fprintf(fp, 
+  "\nMonitor: In addition to controlling 'yar' via its command line arguments\n"
   "'yar' provides a simple monitoring interface on a seperate tty.\n"
   "A link to this tty will be the pid of the yar process suffixed with\n"
   "'.mon' (eg. '12345.mon'). By default the link is created in the working\n"
@@ -294,10 +308,9 @@ usage(char *name, FILE *fp)
   "overridden with the '-m' option.  The monitor interface provides a\n"
   "set of monitor commands that lets you control and inspect various\n"
   "aspects of the  running 'yar'.\n"
-  "Monitor commands:\n",
-	  name, DEFAULT_BCSTTTY_LINK,
-	  GBLS.defaultcmddelay, GBLS.restartcmddelay, GBLS.errrestartcmddelay);
-  monusage();
+	  "Monitor commands:\n");
+  monusage(fp);
+
 }
 
 static void
@@ -788,7 +801,7 @@ monProcess(int epollfd)
   }
   
   monprintf("yar: %s: command not found\n", cmd);
-  monusage();
+  monusage(GBLS.mon.fileptr);
   monprintf("FAILED\n");
   monGreeting();
 }

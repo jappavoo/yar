@@ -6,18 +6,35 @@
 // JA: FIXME the following needs to be used
 //    in all fs operations right things are just
 //    hard coded
-struct filedesc {
-  const char *name;
-  const fuse_ino_t ino;
-} files[] = {
-  [0] =         { .name =  NULL,   .ino = -1 },
+fs_file_t fs_files[] = {
+  [0] =         { .name =  NULL,   .ino = -1, .usage = NULL },
   #define DOT_INO 1
-  [DOT_INO] =   { .name = ".",     .ino = DOT_INO },
+  [DOT_INO] =   { .name = ".",     .ino = DOT_INO, .usage = NULL },
   #define CMDS_INO 2
-  [CMDS_INO] =  { .name = "cmds",  .ino = CMDS_INO },
+  [CMDS_INO] =  { .name = "cmds",  .ino = CMDS_INO,
+  .usage = "reading this file returns the names of the current command lines."},
   #define LCMDS_INO 3
-  [LCMDS_INO] = { .name = "lcmds", .ino = LCMDS_INO }
+  [LCMDS_INO] = { .name = "lcmds", .ino = LCMDS_INO,
+  .usage = NULL},
+  { .name =  NULL, .usage = NULL, .ino = -1 },
 };
+
+extern void
+fsusage(FILE *fp)
+{
+  for (int i=1;;i++) {
+    if (fs_files[i].name == NULL) return;
+    else {
+      if (fs_files[i].usage) {
+	if (fp == GBLS.mon.fileptr) {
+	  monprintf("\t%s\t%s\n", fs_files[i].name, fs_files[i].usage);
+	} else {
+	  fprintf(fp, "\t%s\t%s\n", fs_files[i].name, fs_files[i].usage);
+	}
+      }
+    }
+  }
+}
 
 static off_t cmdNamesSize()
 {
@@ -81,7 +98,7 @@ static void fs_ll_lookup(fuse_req_t req, fuse_ino_t parent,
 {
   struct fuse_entry_param e;
 
-  if (parent != 1 || strcmp(name, files[CMDS_INO].name) != 0)
+  if (parent != 1 || strcmp(name, fs_files[CMDS_INO].name) != 0)
     fuse_reply_err(req, ENOENT);
   else {
     memset(&e, 0, sizeof(e));
@@ -137,7 +154,7 @@ static void fs_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     memset(&b, 0, sizeof(b));
     dirbuf_add(req, &b, ".", 1);
     dirbuf_add(req, &b, "..", 1);
-    dirbuf_add(req, &b, files[CMDS_INO].name, CMDS_INO);
+    dirbuf_add(req, &b, fs_files[CMDS_INO].name, CMDS_INO);
     reply_buf_limited(req, b.p, b.size, off, size);
     free(b.p);
   }
@@ -304,6 +321,7 @@ fsCreate(fs_t *this, char *name)
     perror("fsCreate: mkdir");
     return false;
   }
+  this->mkdir = true;
   fuse_opt_add_arg(&this->fuse_args, name);
 	
   this->fuse_se = fuse_session_new(&this->fuse_args, &fs_ll_oper,
@@ -372,7 +390,7 @@ extern bool fsSetMntPtdir(fs_t *this, char *dir)
 extern bool
 fsCleanup(fs_t *this)
 {
-  if (this->mntpt) {  
+  if (this->mntpt && this->mkdir) {  
     if (this->fuse_se) {
       fuse_session_unmount(this->fuse_se);
       fuse_session_destroy(this->fuse_se);
@@ -381,7 +399,7 @@ fsCleanup(fs_t *this)
       this->fuse_args = (struct fuse_args)FUSE_ARGS_INIT(0, NULL);
     }
     if (this->fuse_buf.mem) free(this->fuse_buf.mem);
-    ASSERT(rmdir(this->mntpt)==0);
+    rmdir(this->mntpt);
     free(this->mntpt);
     this->mntpt = NULL;
   }
