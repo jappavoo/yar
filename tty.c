@@ -87,27 +87,13 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
 
 extern bool
 ttySetlink(tty_t *this, char *ttylink)
-{
-  int n;
-  
+{  
   assert(this);
-  
   if (this->link) free(this->link);
-
-  if (ttylink == NULL) {
-    this->link = NULL;
-    return true;
-  }
-   // WE ASSUME ttylink is a properly null terminated string!
-  n=strlen(ttylink);
-  if (n==0) return false;
-
-  n=n+1; // add one for null termination
-  this->link=malloc(n);
-
-  strncpy(this->link, ttylink, n);
-  assert(this->link[n]==0);
-
+  if (ttylink == NULL) { this->link = NULL; return true; }
+  // WE ASSUME ttylink is a properly null terminated string!
+  this->link = strdup(ttylink);
+  assert(this->link);
   return true;
 }
  
@@ -274,8 +260,8 @@ ttyWriteBuf(tty_t *this, char *buf, int len,  struct timespec *ts)
       if (verbose(2)) {
 	asciistr_t charstr;
 	ascii_char2str((int)buf[0], charstr);
-	VPRINT("  %p:%s(%s): fd:%d n=%d buf[0]:%02x(%s) %s", this, this->link, this->path,
-	       this->dfd, n, buf[0], charstr,
+	VPRINT("  %p:%s(%s): fd:%d n=%d buf[0]:%02x(%s) %s", this, this->link,
+	       this->path, this->dfd, n, buf[0], charstr,
 	       (ascii_isprintable(buf[0])) ? "" : "^^^^ NOT PRINTABLE ^^^^");
 	if (ts) fprintf(stderr, "@%ld:%ld\n", ts->tv_sec, ts->tv_nsec);
 	else fprintf(stderr, "\n");

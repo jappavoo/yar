@@ -1,7 +1,8 @@
-SRCS       := main.c tty.c cmd.c hexdump.c
+SRCS       := main.c tty.c cmd.c fs.c hexdump.c
 OBJS       := $(SRCS:%.c=%.o)
 O          :=0
-CFLAGS     += -g -O${O} -std=gnu99 -MD -MP -Wall -Werror
+CFLAGS     += -g -O${O} -std=gnu99 -MD -MP -Wall \
+	-Werror $(shell pkg-config fuse3 --cflags)
 TARGETS    := yar
 UTHASHREPO := git@github.com:troydhanson/uthash.git
 UTHASHDIR  := ext/uthash
@@ -19,7 +20,7 @@ ifeq ($(wildcard /usr/include/sys/pidfd.h),)
 endif
 
 
-LDFLAGS    += -L${TLPILIBDIR} -l${TLPILIB}
+LDFLAGS    += -L${TLPILIBDIR} -l${TLPILIB} $(shell pkg-config fuse3 --cflags --libs)
 EXTFILES    = ${UTHASHINCS}/uthash.h \
 	${TLPIDIR}/lib${TLPILIB}.a
 

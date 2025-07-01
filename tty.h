@@ -11,7 +11,8 @@ extern bool ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw);
 extern bool ttyRegisterEvents(tty_t *this, int epollfd);
 extern bool ttyCleanup(tty_t *this);
 extern int  ttyWriteBuf(tty_t *this, char *buf, int len, struct timespec *ts);
-extern int  ttyReadChar(tty_t *this, char *c, struct timespec *ts, double delay);
+extern int  ttyReadChar(tty_t *this, char *c, struct timespec *ts,
+			double delay);
 extern void ttyPortSpace(tty_t *this, int *in, int *out, int *sin, int *sout);
 
 // INLINES

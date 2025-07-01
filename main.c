@@ -12,7 +12,11 @@ static evnthdlrrc_t monEvent(void *obj, uint32_t evnts, int epollfd);
 
 globals_t GBLS = {
   .mon                = { .ed = {.obj = &(GBLS.mon), .hdlr = &monEvent },
-			  .fileptr = NULL, .n = 0 },
+			  .fileptr = NULL, .n = 0, .silent = true },
+  .fs                 = { .ed = {.obj = NULL, .hdlr = NULL }, 
+                          .fuse_args = FUSE_ARGS_INIT(0, NULL),
+			  .fuse_buf = { .mem = NULL },
+			  .fuse_se = NULL, .mntpt = NULL, .fuse_fd = -1 },
   .stopstr            = NULL,
   .slowestcmd         = NULL,
   .verbose            = 0,
@@ -28,7 +32,7 @@ globals_t GBLS = {
   .errrestartcmddelay = 10.0
 };
 
-#define monprintf(...) if (GBLS.mon.tty.opens != 0) \
+#define monprintf(...) if (GBLS.mon.tty.opens != 0 && !GBLS.mon.silent)		\
     { fprintf(GBLS.mon.fileptr, __VA_ARGS__); fflush(GBLS.mon.fileptr); }
 
 static int monExit(int, int);
@@ -36,36 +40,41 @@ static int monAdd(int, int);
 static int monIdleExit(int, int);
 static int monDel(int, int);
 static int monList(int, int);
+static int monToggleSilent(int, int) {
+  GBLS.mon.silent = !GBLS.mon.silent;
+  if (GBLS.mon.silent) { monprintf("monitor silent: true\n"); }
+  else { monprintf("monitor silent: false\n"); }
+  return 0;
+}
 static int monToggleRestart(int, int) {
   GBLS.restart = !GBLS.restart;
-  if (GBLS.restart) fprintf(stderr, "global restart commands: "
-				   "true\n");
-  else fprintf(stderr, "global restart commands: false\n");
+  if (GBLS.restart) { monprintf("global restart commands: true\n"); }
+  else { monprintf("global restart commands: false\n"); }
   return 0;
 }
 static int monToggleLB(int, int) {
   GBLS.linebufferbcst = !GBLS.linebufferbcst;
-  if (GBLS.linebufferbcst) fprintf(stderr, "line buffer broadcast output: "
-				   "true\n");
-  else fprintf(stderr, "line buffer broadcast output: false\n");
+  if (GBLS.linebufferbcst) { monprintf("line buffer broadcast output: "
+				       "true\n"); }
+  else { monprintf("line buffer broadcast output: false\n"); }
   return 0;
 }
 static int monTogglePrefix(int, int) {
   GBLS.prefixbcst = !GBLS.prefixbcst;
-  if (GBLS.prefixbcst) fprintf(stderr, "prefix broadcast output: true\n");
-  else fprintf(stderr, "prefix broadcast output : false\n");
+  if (GBLS.prefixbcst) { monprintf("prefix broadcast output: true\n"); }
+  else { monprintf("prefix broadcast output : false\n"); }
   return 0;
 }
 static int monVerboseInc(int, int) {
   GBLS.verbose++;
   if (GBLS.verbose<0) GBLS.verbose=0;
-  fprintf(stderr, "verbosity: %d\n", GBLS.verbose);
+  monprintf("verbosity: %d\n", GBLS.verbose); 
   return 0;
 }
 static int monVerboseDec(int, int) {
   GBLS.verbose--;
   if (GBLS.verbose<0) GBLS.verbose=0;
-  fprintf(stderr, "verbosity: %d\n", GBLS.verbose);
+  monprintf("verbosity: %d\n", GBLS.verbose);
   return 0;
 }
 static int monHelp(int, int);
@@ -82,8 +91,8 @@ struct MonCmdDesc {
                           "\t\t<name,pty,log,delay,command line>",
    .cmd=monAdd },
   {.name = "a",    .usage=NULL, .cmd=monAdd },
-  {.name = "del",  .usage="delete command line instance requires command name:\n"
-                          "\t\t<name>",
+  {.name = "del",  .usage="delete command line instance requires command name:"
+                          "\n\t\t<name>",
    .cmd=monDel },
   {.name = "d",  .usage=NULL, .cmd=monDel },
   {.name = "list", .usage="[-l|-d] list current command line instances.\n"
@@ -113,6 +122,8 @@ struct MonCmdDesc {
    .cmd = monVerboseInc },
   {.name = "v-", .usage="decrease debug verbosity",
    .cmd = monVerboseDec },
+  {.name = "silent", .usage="unsilence/silence monitor output",
+   .cmd = monToggleSilent },
   {.name = NULL,   .cmd=NULL }            // mark end of command array
 };
 
@@ -133,154 +144,157 @@ usage(char *name, FILE *fp)
 {
   if (fp == GBLS.mon.fileptr && GBLS.mon.tty.opens == 0) return;
   fprintf(fp,
-	  "USAGE: %s [Global Options] [[name,pty,log,delay,command line]...]\n"
-	  "Yet Another Relay (yar)\n"
-	  "-----------------------\n\n"	  
-	  "'yar' strives to be a generic \"command\" manager that supports\n"
-	  "i/o broadcasting and coalescing.  Its goal is to make it easier\n"
-	  "to manage and automate a set of parrallel operations.  For example,\n"
-          "you can use yar to control several remote systems by specifying a\n"
-	  "set of ssh command that it will automatically start (and restart).\n"
-	  "For each ssh it will create a tty file that you can read and write\n"
-	  "data to interact with one of the ssh instances.  However, it will\n"
-	  "also create a broadcast tty that when written to will send the data\n"
-	  "to all the ssh sessions (starting them if needed).  'yar' will also\n" 
-          "coalese the output received from all the commands and write it\n"
-	  "to the broadcast tty.\n\n"
+"USAGE: %s [Global Options] [[name,pty,log,delay,command line]...]\n"
+"Yet Another Relay (yar)\n"
+"-----------------------\n\n"	  
+  "'yar' strives to be a generic \"command\" manager that supports\n"
+  "i/o broadcasting and coalescing.  Its goal is to make it easier\n"
+  "to manage and automate a set of parrallel operations.  For example,\n"
+  "you can use yar to control several remote systems by specifying a\n"
+  "set of ssh command that it will automatically start (and restart).\n"
+  "For each ssh it will create a tty file that you can read and write\n"
+  "data to interact with one of the ssh instances.  However, it will\n"
+  "also create a broadcast tty that when written to will send the data\n"
+  "to all the ssh sessions (starting them if needed).  'yar' will also\n" 
+  "coalese the output received from all the commands and write it\n"
+  "to the broadcast tty.\n\n"
 	  
-	  "By default 'yar' it will not disambiguate the output,  rather it\n"
-	  "will write the raw data from any command immediately to the\n"
-	  "broadcast tty, leaving that task of demuliplexing/demangling it to\n"
-	  "you.  This allows you to use commands who's output might already\n"
-	  "include enough information to be demultiplex.  However, to support\n"
-	  "the common use of commands that produce ascii line oriented data\n"
-	  "you can use the '-l' and '-p'  flags.  '-l' tells 'yar' to line\n"
-	  "buffer the output from a command and only write complete lines at\n"
-	  "a time from a to the broadcast tty.  the '-l' flag tells 'yar' to\n"
-	  "prefix the data written to the broadcast tty with the 'name' of the\n"
-	  "command. Using the '-l' and '-p' flag together let's you easily\n"
-	  "decompose the output from parallel command in a meaninful way.\n"
-	  "Command 'names' are discussed below.\n\n"
+  "By default 'yar' it will not disambiguate the output,  rather it\n"
+  "will write the raw data from any command immediately to the\n"
+  "broadcast tty, leaving that task of demuliplexing/demangling it to\n"
+  "you.  This allows you to use commands who's output might already\n"
+  "include enough information to be demultiplex.  However, to support\n"
+  "the common use of commands that produce ascii line oriented data\n"
+  "you can use the '-l' and '-p'  flags.  '-l' tells 'yar' to line\n"
+  "buffer the output from a command and only write complete lines at\n"
+  "a time from a to the broadcast tty.  the '-l' flag tells 'yar' to\n"
+  "prefix the data written to the broadcast tty with the 'name' of the\n"
+  "command. Using the '-l' and '-p' flag together let's you easily\n"
+  "decompose the output from parallel command in a meaninful way.\n"
+  "Command 'names' are discussed below.\n\n"
 
-	  "It is important to remember that since 'yar' also creates command\n"
-	  "specific ttys you can demultiplex the output by reading these ttys,\n"
-	  "or avoid broadcasting by writting to a specific command via its\n"
-	  "specific ttys.  'yar' is designed to be flexible and encourage\n"
-	  "creative use and prompt \"parallel\" thinking.\n\n"
+  "It is important to remember that since 'yar' also creates command\n"
+  "specific ttys you can demultiplex the output by reading these ttys,\n"
+  "or avoid broadcasting by writting to a specific command via its\n"
+  "specific ttys.  'yar' is designed to be flexible and encourage\n"
+  "creative use and prompt \"parallel\" thinking.\n\n"
 
-	  "Commands: At the core of 'yar' are commands.  Command can be an\n"
-	  "arbitrary shell command line.  To run the command line, yar will fork\n"
-	  "a child process and use the users default shell to execute the command.\n"
-	  "To specify you must use a 'yar' command specification. The syntax is\n"
-	  "as follows:\n\n"
+  "Commands: At the core of 'yar' are commands.  Command can be an\n"
+  "arbitrary shell command line.  To run the command line, yar will fork\n"
+  "a child process and use the users default shell to execute the command.\n"
+  "To specify you must use a 'yar' command specification. The syntax is\n"
+  "as follows:\n\n"
 	  
-	  "    <name>,[pty link name],[log],[delay],<command line>\n\n"
+  "    <name>,[pty link name],[log],[delay],<command line>\n\n"
 	  
-	  " <name>: is a required unique name you must provide to identify this\n"
-	  " command line instance.  Eg. \n"
-	  "           'csa2,,,,ssh csa2.bu.edu'\n"
-	  " would associate the name 'csa2'  with an instance of the command\n"
-          " 'ssh csa2.bu.edu'.\n\n"
+  " <name>: is a required unique name you must provide to identify this\n"
+  " command line instance.  Eg. \n"
+  "           'csa2,,,,ssh csa2.bu.edu'\n"
+  " would associate the name 'csa2'  with an instance of the command\n"
+  " 'ssh csa2.bu.edu'.\n\n"
 	  
-	  " [pty link name]: 'yar' will create a pty (see man pty) for the\n"
-	  " input and output of each command line instance. Additionally, 'yar'\n"
-	  " will create a symbolic link to the pty so that you can easily read\n"
-	  " and  write from and to the command line instance. By default the\n"
-	  " link will be created in the current directory you started yar in \n"
-	  " its file name will be the same as the <name> you gave the to the\n"
-	  " command line instance. Eg. in the example above\n"
-	  " 'csa2,,,,ssh csa2.bu.edu' the the link create will be name 'csa2'\n"
-          " in the directory you started yar.  If you would like to overide this\n"
-	  " name you can specify it via the [pty link name] value of the\n"
-	  " specification.  Eg.  'csa2,/tmp/bu2tty,,,ssh csa2.bu.edu' would\n"
-	  " overide the default and path of the link to the pty will be\n"
-	  " '/tmp/bu2tty'.  Opening this pty, which can be done via its link,\n"
-	  " will start the command instance running if it is not already running.\n"
-	  " Eg. 'cat /tmp/bu2tty' will start the ssh and read and display any\n"
-	  " data it produces to you.  Similarly to send data to the instance you\n"
-	  " could do something like 'cat > /tmp/bu2tty' or \n"
-	  "'echo \"echo hello world\" > /tmp/bu2tty'.  A common and convient\n"
-	  " way to interactively work with the command line instance would be\n"
-	  " to use the 'socat' command.  Eg. 'socat - /tmp/bu2tty'.  This would\n"
-	  " allow you to work with command as if you has launched by hand.\n\n"
+  " [pty link name]: 'yar' will create a pty (see man pty) for the\n"
+  " input and output of each command line instance. Additionally, 'yar'\n"
+  " will create a symbolic link to the pty so that you can easily read\n"
+  " and  write from and to the command line instance. By default the\n"
+  " link will be created in the current directory you started yar in \n"
+  " its file name will be the same as the <name> you gave the to the\n"
+  " command line instance. Eg. in the example above\n"
+  " 'csa2,,,,ssh csa2.bu.edu' the the link create will be name 'csa2'\n"
+  " in the directory you started yar.  If you would like to overide this\n"
+  " name you can specify it via the [pty link name] value of the\n"
+  " specification.  Eg.  'csa2,/tmp/bu2tty,,,ssh csa2.bu.edu' would\n"
+  " overide the default and path of the link to the pty will be\n"
+  " '/tmp/bu2tty'.  Opening this pty, which can be done via its link,\n"
+  " will start the command instance running if it is not already running.\n"
+  " Eg. 'cat /tmp/bu2tty' will start the ssh and read and display any\n"
+  " data it produces to you.  Similarly to send data to the instance you\n"
+  " could do something like 'cat > /tmp/bu2tty' or \n"
+  "'echo \"echo hello world\" > /tmp/bu2tty'.  A common and convient\n"
+  " way to interactively work with the command line instance would be\n"
+  " to use the 'socat' command.  Eg. 'socat - /tmp/bu2tty'.  This would\n"
+  " allow you to work with command as if you has launched by hand.\n\n"
 
-	  " [log] If specified 'yar' will log all the data written to and read\n"
-	  " from the command (when either the command's pty or the broadcast pty\n"
-	  " is open). This is NOT YET IMPLEMENTED please consider adding \n"
-	  " support to this -- eg. write the code\n\n"
+  " [log] If specified 'yar' will log all the data written to and read\n"
+  " from the command (when either the command's pty or the broadcast pty\n"
+  " is open). This is NOT YET IMPLEMENTED please consider adding \n"
+  " support to this -- eg. write the code\n\n"
 
-	  " [delay] If specified a delay will be added between reading bytes\n"
-	  " from the command's pty that is [delay] seconds.  This value can be\n"
-	  " expressed as a floating point number eg. \n"
-	  "       'csa2,/tmp/bu2tty,,0.01,ssh csa2.bu.edu'\n"
-          " specifies that the when data is written to the command line\n"
-	  " via its pty then a delay of .01 seconds will be added between\n"
-	  " reading each character.  This in turn will force the data written\n"
-	  " to the command to be written at a rate that reflects this delay.\n"
-	  " See the global -d option for the default behavour if the value this\n"
-	  " value is omitted from a command specification\n\n"
+  " [delay] If specified a delay will be added between reading bytes\n"
+  " from the command's pty that is [delay] seconds.  This value can be\n"
+  " expressed as a floating point number eg. \n"
+  "       'csa2,/tmp/bu2tty,,0.01,ssh csa2.bu.edu'\n"
+  " specifies that the when data is written to the command line\n"
+  " via its pty then a delay of .01 seconds will be added between\n"
+  " reading each character.  This in turn will force the data written\n"
+  " to the command to be written at a rate that reflects this delay.\n"
+  " See the global -d option for the default behavour if the value this\n"
+  " value is omitted from a command specification\n\n"
 
-	  " <command line> every command specification must include a shell\n"
-          " command line to run.  For each specification yar will manage the\n"
-	  " execution of this command line as follows:\n"
-	  "  1. It will keep one instance of the command line running as long\n"
-	  "     as either the command's pty is one or the broadcast pty is open.\n"
-	  "  2. It will terminate the command when all opens of the command pty\n"
-	  "     have been closed.\n"
-	  "  3. If the command exits, with out 'yar' explicitly terminating it,\n"
-	  "     'yar' will automatically restart it.  If it exits failing exit\n"
-	  "     status (non-zero exit status) it will delay the restart\n"
-	  "     by the error restart delay (see global option '-e <delay>' below).\n"
-	  "     If it exits with a success exist status (zero exit status) 'yar'\n'"
-	  "     will delay the restart by the restart delay (see global option\n"
-	  "     '-r <delay>' below).\n"
-	  " In this way 'yar' can be used to effectively \"baby sit\" a command.\n"
-	  " If you hold the command's pty open (or the broadcast pty), 'yar'\n"
-	  " will ensure a single instance will be kept running respawing as need\n"
-	  " (trottled by the delay values specified using '-r' and '-e').\n"
-	  " Note: Each command specification represents an independent instance\n"
-	  "       that 'yar' manages. Howerver, what the command line is for each\n"
-	  "       instance is completely up to you.  As such you can have 'yar'\n"
-	  "       create and manage multiple instances of the same command line.\n"
-	  "       eg. both of these are valid uses of 'yar':\n"
-	  "         1.  yar -l -p 'bu1,,,,ssh bu' 'bu2,,,,ssh bu'\n"
-	  "         2.  yar -l -p 'bu1,,,,ssh csa1.bu.edu' 'bu2,,,,ssh csa2.bu.edu'\n\n"
-	  "Global Options:\n"
-	  " -h print this usage message\n"
-	  " -b <path> path name for broadcast tty link (default %s)\n"
-	  " -d <delay sec> default value to pace all tty reads and there by\n"
-	  "    trottle the rate at which data is written to commands.\n"
-	  "    For example, if you passed \"-d 1.25\", then by default bytes\n"
-	  "    will not be read faster than 1.25 seconds even if they are\n"
-	  "    This is a crude way tp pace the rate at which data is written to\n"
-	  "    commands. Note this value will be used if the per cmd delay\n"
-	  "    value is not specified. Reads broadcast tty will be paced to the\n"
-	  "    slowest value specified (default %f)\n"
-	  " -r <delay sec> delay between restarting a command that exits with\n"
-	  "    success (default %f) \n"
-	  " -e <delay sec> delay between restarting a command that exist with\n"
-	  "    failure (default %f)\n"
-	  " -l enable line buffering of output from commands when written to \n"
-	  "    the broadcast tty (note even if -l is specified data from a commnd\n"
-	  "    will NOT be line buffered to the command's pty rather only data\n"
-	  "    written to the broadcast tty will be line buffered.\n"
-	  " -m <diretory path> the directory in which the monitor tty link will\n"
-	  "    be created in.  The link's name is process id (pid) of yar.\n"
-	  " -p enable prefixing the output from commands written to the\n"
-	  "    broadcast tty with the specified name for the command.\n"
-	  " -s <string> this sting will be sent to the command line when\n"
-	  "    stopping it.  If specified a newline will always be prepended.\n"
-	  " -v increase debug message verbosity.  This option can be used\n"
-	  "    multiple times to the verbosity Eg. -v versus -vv etc.\n"
-	  "Monitor: In addition to controlling 'yar' via its command line arguments\n"
-	  "'yar' provides a simple monitoring interface on a seperate tty.\n"
-	  "A link to this tty will be the pid of the yar process suffixed with\n"
-	  "'.mon' (eg. '12345.mon'). By default the link is created in the working\n"
-	  "directory from which yar was launched. This default can be\n"
-	  "overridden with the '-m' option.  The monitor interface provides a\n"
-	  "set of monitor commands that lets you control and inspect various\n"
-	  "aspects of the  running 'yar'.\n"
-	  "Monitor commands:\n",
+  " <command line> every command specification must include a shell\n"
+  " command line to run.  For each specification yar will manage the\n"
+  " execution of this command line as follows:\n"
+  "  1. It will keep one instance of the command line running as long\n"
+  "     as either the command's pty is one or the broadcast pty is open.\n"
+  "  2. It will terminate the command when all opens of the command pty\n"
+  "     have been closed.\n"
+  "  3. If the command exits, with out 'yar' explicitly terminating it,\n"
+  "     'yar' will automatically restart it.  If it exits failing exit\n"
+  "     status (non-zero exit status) it will delay the restart\n"
+  "     by the error restart delay (see global option '-e <delay>' below).\n"
+  "     If it exits with a success exist status (zero exit status) 'yar'\n'"
+  "     will delay the restart by the restart delay (see global option\n"
+  "     '-r <delay>' below).\n"
+  " In this way 'yar' can be used to effectively \"baby sit\" a command.\n"
+  " If you hold the command's pty open (or the broadcast pty), 'yar'\n"
+  " will ensure a single instance will be kept running respawing as need\n"
+  " (trottled by the delay values specified using '-r' and '-e').\n"
+  " Note: Each command specification represents an independent instance\n"
+  "       that 'yar' manages. Howerver, what the command line is for each\n"
+  "       instance is completely up to you.  As such you can have 'yar'\n"
+  "       create and manage multiple instances of the same command line.\n"
+  "       eg. both of these are valid uses of 'yar':\n"
+  "         1.  yar -l -p 'bu1,,,,ssh bu' 'bu2,,,,ssh bu'\n"
+  "         2.  yar -l -p 'bu1,,,,ssh csa1.bu.edu' "
+  "'bu2,,,,ssh csa2.bu.edu'\n\n"
+	  
+  "Global Options:\n"
+  " -h print this usage message\n"
+  " -b <path> path name for broadcast tty link (default %s)\n"
+  " -d <delay sec> default value to pace all tty reads and there by\n"
+  "    trottle the rate at which data is written to commands.\n"
+  "    For example, if you passed \"-d 1.25\", then by default bytes\n"
+  "    will not be read faster than 1.25 seconds even if they are\n"
+  "    This is a crude way tp pace the rate at which data is written to\n"
+  "    commands. Note this value will be used if the per cmd delay\n"
+  "    value is not specified. Reads broadcast tty will be paced to the\n"
+  "    slowest value specified (default %f)\n"
+  " -r <delay sec> delay between restarting a command that exits with\n"
+  "    success (default %f) \n"
+  " -e <delay sec> delay between restarting a command that exist with\n"
+  "    failure (default %f)\n"
+  " -l enable line buffering of output from commands when written to \n"
+  "    the broadcast tty (note even if -l is specified data from a commnd\n"
+  "    will NOT be line buffered to the command's pty rather only data\n"
+  "    written to the broadcast tty will be line buffered.\n"
+  " -m <diretory path> the directory in which the monitor tty link will\n"
+  "    be created in.  The link's name is process id (pid) of yar.\n"
+  " -p enable prefixing the output from commands written to the\n"
+  "    broadcast tty with the specified name for the command.\n"
+  " -s <string> this sting will be sent to the command line when\n"
+  "    stopping it.  If specified a newline will always be prepended.\n"
+  " -v increase debug message verbosity.  This option can be used\n"
+  "    multiple times to the verbosity Eg. -v versus -vv etc.\n\n"
+	  
+  "Monitor: In addition to controlling 'yar' via its command line arguments\n"
+  "'yar' provides a simple monitoring interface on a seperate tty.\n"
+  "A link to this tty will be the pid of the yar process suffixed with\n"
+  "'.mon' (eg. '12345.mon'). By default the link is created in the working\n"
+  "directory from which yar was launched. This default can be\n"
+  "overridden with the '-m' option.  The monitor interface provides a\n"
+  "set of monitor commands that lets you control and inspect various\n"
+  "aspects of the  running 'yar'.\n"
+  "Monitor commands:\n",
 	  name, DEFAULT_BCSTTTY_LINK,
 	  GBLS.defaultcmddelay, GBLS.restartcmddelay, GBLS.errrestartcmddelay);
   monusage();
@@ -298,7 +312,8 @@ GBLSDump(FILE *f)
   fprintf(f, "GBLS.errrestartcmddelay=%f\n", GBLS.errrestartcmddelay);
   fprintf(f, "GBLS: restart=%d linebufferbst:%d prefixbcst:%d bcstflg:%d "
 	  "exitonidle:%d\n",
-	  GBLS.restart, GBLS.linebufferbcst, GBLS.prefixbcst, GBLS.bcstflg, GBLS.exitonidle);
+	  GBLS.restart, GBLS.linebufferbcst, GBLS.prefixbcst, GBLS.bcstflg,
+	  GBLS.exitonidle);
   ttyDump(&GBLS.bcsttty, stderr, "GBLS.bcsttty: ");
   fprintf(f, "GBLS.cmds:");
   {
@@ -659,7 +674,8 @@ monAdd(int args, int epollfd)
 	  // if the broadcast tty is currently open then start command
 	  // immediately
 	  if (GBLS.bcsttty.opens>0 && cmdStart(cmd, true, epollfd, 0.0)) {
-	    VPRINT("%s started pidfd=%d pid=%d\n", cmd->name, cmd->pidfd, cmd->pid);
+	    VPRINT("%s started pidfd=%d pid=%d\n", cmd->name, cmd->pidfd,
+		   cmd->pid);
 	  }
 	}
       }
@@ -930,6 +946,9 @@ theLoop()
 
   // register for the monitor interface events
   monitorRegisterEvents(epollfd);
+
+  // register for the fs interface events
+  fsRegisterEvents(&GBLS.fs, epollfd);
   
   // register for the broadcast client interface events
   bcstttyRegisterEvents(epollfd);
@@ -1009,7 +1028,10 @@ argsParse(int argc, char **argv)
 	perror("bad restart error delay value");
 	return  false;
       }
-      break;      
+      break;
+    case 'f':
+      fsSetMntPtdir(&(GBLS.fs),optarg);
+      break;
     case 'h':
       usage(argv[0],stderr);
       return false;
@@ -1074,6 +1096,7 @@ void cleanup(void)
       free(cmd);
     }
   }
+  fsCleanup(&(GBLS.fs));
   monCleanup();
 }
 
@@ -1093,7 +1116,10 @@ int main(int argc, char **argv)
   GBLS.pid = getpid();
 
   // init monitor tty
-  monInit(GBLS.pid);
+  monInit();
+
+  // init fs
+  if (!fsInit(&(GBLS.fs))) EEXIT();
   
   // init broadcast tty
   if (!ttyInit(&GBLS.bcsttty, DEFAULT_BCSTTTY_LINK)) EEXIT();
@@ -1107,6 +1133,9 @@ int main(int argc, char **argv)
   // create the monitor tty
   monttyCreate();
 
+  // create the fs
+  if (!fsCreate(&(GBLS.fs), argv[0])) EEXIT();
+  
   // create the broadcast tty
   bcstttyCreate();
 
@@ -1119,9 +1148,10 @@ int main(int argc, char **argv)
 
 asciistr_t ascii_nonprintable[32] = {
   [0] = "NUL", [1] = "SOH", [2] = "STX", [3] = "ETX", [4] = "EOT", [5] = "ENQ",
-  [06] = "ACK", [7] = "\\a", [8] = "\\b", [9] = "\\t", [10] = "\\n", [11] = "\\v",
-  [12] = "\\f", [13] = "\\r", [14] = "SO", [15] = "SI", [16] = "DLE",
-  [17] = "DC1", [18] = "DC2", [19] = "DC3", [20] = "DC4", [21] = "NAK",
-  [22] = "SYN", [23] = "ETB", [24] = "CAN", [25] = "EM", [26] = "SUB",
-  [27] = "ESC", [28] = "FS", [29] = "GS", [30] = "RS", [31] = "US"
+  [06] = "ACK", [7] = "\\a", [8] = "\\b", [9] = "\\t", [10] = "\\n",
+  [11] = "\\v", [12] = "\\f", [13] = "\\r", [14] = "SO", [15] = "SI",
+  [16] = "DLE", [17] = "DC1", [18] = "DC2", [19] = "DC3", [20] = "DC4",
+  [21] = "NAK", [22] = "SYN", [23] = "ETB", [24] = "CAN", [25] = "EM",
+  [26] = "SUB", [27] = "ESC", [28] = "FS", [29] = "GS", [30] = "RS",
+  [31] = "US"
 };

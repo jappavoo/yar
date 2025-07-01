@@ -57,8 +57,8 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
     if (evnts && verbose(2)) {
       asciistr_t charstr;
       ascii_char2str(c, charstr);
-      fprintf(stderr,"cmdttyEvent: ---> CMDTTY: START: EIN: tty(%p):%s(%s) fd:%d"
-		 " evnts:0x%08x cmd:%p(%s)\n"
+      fprintf(stderr,"cmdttyEvent: ---> CMDTTY: START: EIN: tty(%p):%s(%s)"
+	             " fd:%d evnts:0x%08x cmd:%p(%s)\n"
 	      "ttyReadChar:    %p:%s(%s) fd:%d c:%02x(%s) %s n:%d\n",
 	      tty, tty->link, tty->path, fd,
 	      evnts, this, this->name,
@@ -84,8 +84,9 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
       } else {
 	if (cmdbufNtoI(this->bufn) == cmdbufNtoI(this->bufstart)) {
 	  this->bufof++; // buffer just wrapped
-	  EPRINT("cmd:%s line overflowed output buffer: start:%zu m:%zu of:%d\n",
-		 this->name, this->bufstart, this->bufn, this->bufof);
+	  EPRINT("cmd:%s line overflowed output buffer: start:%zu m:%zu"
+		 " of:%d\n", this->name, this->bufstart,
+		 this->bufn, this->bufof);
 	}
 	if (c=='\n') {
 	  // Write cmd prefix to tty if enabled
@@ -111,7 +112,7 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
 	      assert(written == len);
 	      n += written;
 	    } else {
-	      // Line wraps across end of the buffer (no overflow and start > end) 
+	      // Line wraps across end of buffer (no overflow and start > end) 
 	      // Requires two writes: 
 	      //   1. beginning of the line is from start to buffer end
 	      len = cmdbufSize - start;
@@ -404,7 +405,8 @@ cmdCltttyNotify(void *obj, uint32_t mask, int epollfd)
 	      this->cmdtty.opens);
     }
     if (cmdStart(this, true, epollfd,0.0)) {
-      VPRINT("%s started pidfd=%d pid=%d\n", this->name, this->pidfd, this->pid);
+      VPRINT("%s started pidfd=%d pid=%d\n", this->name, this->pidfd,
+	     this->pid);
     }
     mask = mask & ~IN_OPEN;
     break;

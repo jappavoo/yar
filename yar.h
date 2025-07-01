@@ -20,6 +20,8 @@
 #include <time.h>
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
+#define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 12)
+#include <fuse_lowlevel.h>
 
 //#define ASSERTS_OFF
 //#define VERBOSE_CHECKS_OFF
@@ -113,8 +115,8 @@ typedef struct  {
   char   *bcstprefix;         // prefix to use if enabled 
   char   *cmdline;            // shell command line of command  
   char   *log;                // path to log (copy of all data written and read)
-  char   *stopstr;            // string to send when stopping takes precedence over
-                              // GBLS.stopstr
+  char   *stopstr;            // string to send when stopping takes precedence 
+                              // over GBLS.stopstr
   double  delay;              // time between writes
   pid_t   pid;                // process id of running command
   size_t  bufn;               // number of bytes buffered [0..SIZE_MAX]
@@ -142,12 +144,24 @@ typedef struct monitor {
                                  // and no error messages!
 } mon_t;
 
+// File System OBject
+//   Provides a file system oriented interface to the yar process
+typedef struct fs {
+  struct fuse_args     fuse_args;
+  struct fuse_buf      fuse_buf;
+  evntdesc_t           ed;           
+  struct fuse_session *fuse_se;
+  char                *mntpt;
+  int                  fuse_fd;
+} fs_t;
+
 // This structs defines all global data structures/variables
 // that can be access from any function/method via the single GBLS instance
 // of this struct
 typedef struct {
   tty_t  bcsttty;             // broadcast tty
   mon_t  mon;                 // monitor object: control interface to yar
+  fs_t   fs;                  // filesystem object: control interface to yar
   cmd_t *cmds;                // hashtable of cmds
   cmd_t *slowestcmd;          // pointer to the slowest cmd so that we can pace
                               // broadcast tty reads based on this command
@@ -155,7 +169,8 @@ typedef struct {
                               // our own write buffering to delay writes
                               // rather we pace reads and let the data
                               // buffer in the kernel tty port
-  char  *stopstr;             // a string to send to a command line when stopping
+  char  *stopstr;             // a string to send to a command line when
+                              // stopping
   double defaultcmddelay;     // default value for sending data to commands
   double restartcmddelay;     // delay restarting command if exited with success
   double errrestartcmddelay;  // delay restarting command if exited with failure
@@ -167,7 +182,8 @@ typedef struct {
   bool   prefixbcst;          // prefix writes to broadcast from cmd with cmd
                               // name
   bool   bcstflg;             // create a broadcast tty
-  bool   restart;             // globally controls if commands should be retarted
+  bool   restart;             // globally controls if commands should be 
+			      // restarted
   bool   exitonidle;          // exit if all commands are removed
 } globals_t;
 extern globals_t GBLS;
@@ -246,6 +262,7 @@ static inline bool verbose(int l) { return GBLS.verbose >= l; }
 #include "hexdump.h"
 #include "tty.h"
 #include "cmd.h"
+#include "fs.h"
 
 #endif
 
