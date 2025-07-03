@@ -968,7 +968,7 @@ theLoop()
       if (errno == EINTR) {
 	// process signal handler state
 	if (GBLS.exitsignaled) {
-	  VPRINT("%s: EINTR: Exited Signaled\n", __func__); 
+	  VPRINT("%s: EINTR: Exited Signaled %d\n", __func__, GBLS.signal); 
 	  rc = false;
 	  goto done;
 	}
@@ -1154,9 +1154,10 @@ void cleanup(void)
 }
 
 void
-exitsignalhandler(int num)
+exitsignalhandler(int sig)
 {
   GBLS.exitsignaled = true;
+  GBLS.signal = sig;
 }
 
 static bool

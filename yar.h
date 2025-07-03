@@ -196,6 +196,7 @@ typedef struct {
   pid_t  pid;                 // pid of this yar processs
   int    verbose;             // verbosity level
   int    initialcmdspecscnt;  // number of initial cmd specs
+  int    signal;              // signal handler will set this to signal number
   bool   linebufferbcst;      // if true output from commands sent to broadcast
                               // tty will be line buffered to avoid interleaving
                               // within a line (max line size is CMD_BUF_SIZE).
