@@ -170,6 +170,7 @@ extern fs_file_t fs_files[];
 // This structs defines all global data structures/variables
 // that can be access from any function/method via the single GBLS instance
 // of this struct
+// all char pointers are malloced
 typedef struct {
   tty_t  bcsttty;             // broadcast tty
   mon_t  mon;                 // monitor object: control interface to yar
@@ -181,13 +182,20 @@ typedef struct {
                               // our own write buffering to delay writes
                               // rather we pace reads and let the data
                               // buffer in the kernel tty port
+  char **initialcmdspecs;     // cmd specs passed as command line args
   char  *stopstr;             // a string to send to a command line when
                               // stopping
+  char  *bcstttylink;         // path of broadcast tty link
+  char  *monttylinkdir;       // path of directory that monitor tty should be in
+  char  *fsmntptdir;          // path of directory that yar fs should be in
+  char  *logpath;             // path of log used when daemonized
+  FILE  *logfile;             // file pointer of log when daemonized
   double defaultcmddelay;     // default value for sending data to commands
   double restartcmddelay;     // delay restarting command if exited with success
   double errrestartcmddelay;  // delay restarting command if exited with failure
   pid_t  pid;                 // pid of this yar processs
-  int    verbose;             // verbosity level 
+  int    verbose;             // verbosity level
+  int    initialcmdspecscnt;  // number of initial cmd specs
   bool   linebufferbcst;      // if true output from commands sent to broadcast
                               // tty will be line buffered to avoid interleaving
                               // within a line (max line size is CMD_BUF_SIZE).
@@ -197,11 +205,21 @@ typedef struct {
   bool   restart;             // globally controls if commands should be 
 			      // restarted
   bool   exitonidle;          // exit if all commands are removed
+  bool   keeplog;             // do not delete log on exit
+  bool   exitsignaled;        // set by signal handlers to trigger exit logic in
+                              // theLoop
+  bool   uselog;              // use a log file for stdout and err and use
+                              // /dev/null for stdin
+  bool   daemonize;           // start as daemon
 } globals_t;
 extern globals_t GBLS;
 
 extern void cleanup();
-#define EPRINT(fmt, ...) {fprintf(stderr, "%s: " fmt, __func__, __VA_ARGS__);}
+#define EPRINT(f, fmt, ...) {						\
+    if (f==GBLS.mon.fileptr) { monprintf("%s: " fmt, __func__, __VA_ARGS__); } \
+    else fprintf(f, "%s: " fmt, __func__, __VA_ARGS__);			\
+  }
+
 static inline void EEXIT() {
   cleanup();
   exit(EXIT_FAILURE);

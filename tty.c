@@ -52,7 +52,7 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
       ievents = ievents & ~IN_CLOSE;
       break;
     default:
-      EPRINT("Unexpected notify case: iev.mask:0x%x ievents:0x%x\n",
+      EPRINT(stderr, "Unexpected notify case: iev.mask:0x%x ievents:0x%x\n",
 	     iev.mask, ievents);
       NYI;
     }
@@ -98,22 +98,16 @@ ttySetlink(tty_t *this, char *ttylink)
 }
  
 extern bool
-ttyInit(tty_t *this, char *ttylink)
+ttyInit(tty_t *this, char *ttylink, bool iszeroed)
 {
+  if (!iszeroed) bzero(this, sizeof(tty_t));
+  // all other values are now zeroed 
   // a non null tty link means the tty is a client tty see ttyIsClient in .h
-  ttySetlink(this, ttylink); 
-  this->path[0]  =  0;
-  this->rbytes   =  0;
-  this->wbytes   =  0;
-  this->delaycnt =  0;
+  this->link     = (ttylink) ? strdup(ttylink) : NULL;  
   this->dfd      = -1;
   this->sfd      = -1;
   this->ifd      = -1;
-  this->iwd      = -1;
-  this->opens    =  0;
-  this->dfded    = (evntdesc_t){ NULL, NULL };
-  this->ifded    = (evntdesc_t){ NULL, NULL };
-  this->ned      = (evntdesc_t){ NULL, NULL };
+  this->iwd      = -1;   // iwatch descriptor is not and fd
   return true;
 }
 
@@ -126,7 +120,7 @@ ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw)
   ASSERT(this && this->dfd == -1);
 
   if (this->link != NULL && access(this->link, F_OK)==0) {
-    EPRINT("%s already exists\n", this->link);
+    EPRINT(stderr, "%s already exists\n", this->link);
     goto cleanup;
   }
   
@@ -268,7 +262,7 @@ ttyWriteBuf(tty_t *this, char *buf, int len,  struct timespec *ts)
       }
     } else {
       // n==0
-      EPRINT("write returned unexpected value?? n=%d\n", n);
+      EPRINT(stderr, "write returned unexpected value?? n=%d\n", n);
       NYI;
     }
   } else {
@@ -325,10 +319,9 @@ ttyCleanup(tty_t *this)
 {
   assert(this);
   VLPRINT(1, "closing: %p\n", this);
-  if (verbose(1)) {
+  if (verbose(2)) {
     ttyDump(this, stderr, NULL);
   }
-  if (this->dfd == -1) return true;
   
   if (this->ifd  != -1 && close(this->ifd) != 0) perror("close tty->ifd");
   if (this->dfd  != -1 && close(this->dfd) != 0) perror("close tty->dfd");
@@ -341,14 +334,11 @@ ttyCleanup(tty_t *this)
     }
     free(this->link);
   }
-  this->link    = NULL;
+  // reset values
+  bzero(this, sizeof(tty_t));
   this->dfd     = -1;
   this->sfd     = -1;
-  this->iwd     = -1;
-  this->path[0] =  0;
-  this->rbytes  =  0;
-  this->wbytes  =  0;
-  this->opens   =  0;
-
+  this->iwd     = -1;   // iwatch descriptor is not an FD
+  this->ifd     = -1;
   return true;
 }

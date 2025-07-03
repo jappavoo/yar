@@ -84,7 +84,7 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
       } else {
 	if (cmdbufNtoI(this->bufn) == cmdbufNtoI(this->bufstart)) {
 	  this->bufof++; // buffer just wrapped
-	  EPRINT("cmd:%s line overflowed output buffer: start:%zu m:%zu"
+	  EPRINT(stderr, "cmd:%s line overflowed output buffer: start:%zu m:%zu"
 		 " of:%d\n", this->name, this->bufstart,
 		 this->bufn, this->bufof);
 	}
@@ -166,7 +166,7 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
     }
     if (verbose(3)) cmdDump(this, stderr, "CMD OUTPUT BUFFERED:");
   } else {
-    EPRINT("read returned: %d\n", n);
+    EPRINT(stderr, "read returned: %d\n", n);
     perror("read");
     NYI;
   }
@@ -357,7 +357,7 @@ cmdCltttyEvent(void *obj, uint32_t evnts, int epollfd)
 	}
       n=cmdWriteChar(this,c);
       if ( n != 1 ) {
-	EPRINT("  write returned: n=%d\n", n);
+	EPRINT(stderr, "  write returned: n=%d\n", n);
 	NYI;
       }
       VLPRINT(2, "--->  CLTTTY: END: EIN: tty(%p):%s(%s) fd:%d"
@@ -424,7 +424,7 @@ cmdCltttyNotify(void *obj, uint32_t mask, int epollfd)
     mask = mask & ~IN_CLOSE;
     break;
   default:
-    EPRINT("Unexpected notify case: mask:0x%x\n",
+    EPRINT(stderr, "Unexpected notify case: mask:0x%x\n",
 	   mask);
     NYI;
   }  
@@ -474,15 +474,17 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
 // on cleanup
 extern bool
 cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
-	char *ttylink, char *log)
+	char *ttylink, char *log, bool iszeroed)
 {
+  // name, cmdline, ttylink and log are supposed to be offsets within
+  // cmdstr ---> freeing cmdstr is the right way to release the resouce
   if (log != NULL) NYI;             // need to open log and add write to it ;-)
   assert(cmdstr && name && cmdline);
+  if (!iszeroed) bzero(this, sizeof(cmd_t));        // zero everthing;
   this->cmdstr            = cmdstr;
-  this->stopstr           = NULL;
-  this->name              = name;
+  this->name              = name;    
   this->bcstprefixlen     = strlen(name)+2;   // +2 for ": " do no include null
-  this->bcstprefix        = malloc(this->bcstprefixlen+1); // +1 for null
+  this->bcstprefix        = malloc(this->bcstprefixlen+1); // +1 for null 
   snprintf(this->bcstprefix, this->bcstprefixlen+1, "%s" ": ", this->name);
   this->cmdline           = cmdline;
   this->delay             = delay;
@@ -499,8 +501,8 @@ cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
   this->lastwrite.tv_sec  = 0;
   this->lastwrite.tv_nsec = 0;
   this->pidfded           = (evntdesc_t){ NULL, NULL };
-  ttyInit(&(this->cmdtty), NULL);
-  ttyInit(&(this->clttty), ttylink);
+  ttyInit(&(this->cmdtty), NULL, true);
+  ttyInit(&(this->clttty), ttylink, true);
   return true;
 }
 
@@ -589,7 +591,8 @@ cmdStart(cmd_t *this, bool raw, int epollfd, double startdelay)
 extern bool
 cmdStop(cmd_t *this, int epollfd, bool force)
 {
-  
+  // checking isRunning is important to allow cleanup to be called multiple
+  // times on an instance
   if (!cmdIsRunning(this)) return false;
 			     
   if (force == false && (this->clttty.opens != 0 || GBLS.bcsttty.opens != 0)) {
@@ -605,21 +608,23 @@ cmdStop(cmd_t *this, int epollfd, bool force)
       // always send a newline first (motivated by ipmitool semantics)
       int n=cmdWriteChar(this,'\n');
       if ( n != 1 ) {
-	EPRINT("  write returned: n=%d\n", n);
+	EPRINT(stderr, "  write returned: n=%d\n", n);
 	NYI;
       }      
       for (; *cptr; cptr++) {
 	int n=cmdWriteChar(this,*cptr);
 	if ( n != 1 ) {
-	  EPRINT("  write returned: n=%d\n", n);
+	  EPRINT(stderr, "  write returned: n=%d\n", n);
 	  NYI;
 	}
 	// hack use 
 	delaysec(this->delay);
       }
+      VPRINT("stopstr: sent: \\n%s\n",
+	     (this->stopstr) ? this->stopstr : GBLS.stopstr);
+    } else {
+      VPRINT("%s", "stopstr==NULL no stop string sent\n");
     }
-    VPRINT("stopstr: sent: \\n%s\n",
-	   (this->stopstr) ? this->stopstr : GBLS.stopstr);
   }
   
   // remove cmd pidfd from epoll as we know we are stopping it
@@ -649,7 +654,7 @@ cmdStop(cmd_t *this, int epollfd, bool force)
     }
     if (ready == 0) {
       // timed out ... moving on to SIGKILL
-      EPRINT("%s did not die with SIGTERM moving on to SIGKILL!", this->name);
+      EPRINT(stderr, "%s did not die with SIGTERM moving on to SIGKILL!", this->name);
       cmdDump(this, stderr, "\n  ");
       assert(kill(this->pid, SIGKILL)==0);
       goto retry;
@@ -750,15 +755,30 @@ cmdCleanup(cmd_t *this)
   ttyCleanup(&(this->cmdtty));
   ttyCleanup(&(this->clttty));
 
-  if (this->bcstprefix) {
-    free(this->cmdstr);
-    free(this->bcstprefix);
-    this->cmdstr        = NULL;
-    this->name          = NULL;
-    this->cmdline       = NULL;
-    this->log           = NULL;
-    this->bcstprefix    = NULL;
-    this->bcstprefixlen = 0;
-  }
+  if (this->bcstprefix) free(this->bcstprefix);
+  if (this->cmdstr) free(this->cmdstr);
+  
+  // cannot use bzero as cmd could be on hash table and this
+  // will destroy its uthash link pointers
+  
+  // fd's must be reset to -1 to be safe for repeated calls to cleanup
+  this->pidfd      = -1;
+  this->pid        = -1;
+  this->exitstatus = -1;
+  this->cmdstr        = NULL;
+  this->name          = NULL;
+  this->cmdline       = NULL;
+  this->log           = NULL;
+  this->bcstprefix    = NULL;
+  this->bcstprefixlen = 0;
+  this->bufn          = 0;
+  this->bufof         = 0;
+  this->restartcnt    = 0;
+  this->restart       = false;
+  this->deleteonexit  = false;
+  this->delay         = 0.0;
+  this->lastwrite.tv_nsec = 0;
+  this->lastwrite.tv_sec = 0;
+  this->pidfded           = (evntdesc_t){ NULL, NULL };
   return true;
 }

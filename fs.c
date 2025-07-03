@@ -361,7 +361,7 @@ static bool
 fsSetMntPt(fs_t *this, char *mntpt)
 {
   assert(this);
-  if (this->mntpt) free(this->mntpt);
+  assert(this->mntpt==NULL);
   if (mntpt==NULL) { this->mntpt = NULL; return true; }
   // WE ASSUME mntpt is a properly null terminated string
   this->mntpt = strdup(mntpt);
@@ -370,20 +370,16 @@ fsSetMntPt(fs_t *this, char *mntpt)
 }
 
 extern bool
-fsInit(fs_t *this)
+fsInit(fs_t *this, char *mntptrdir)
 {
-  char default_fs_mntpt[1024];
-  if (!fsMountPoint(default_fs_mntpt, 1024, NULL)) EEXIT();
-  if (!fsSetMntPt(this, default_fs_mntpt)) EEXIT();
+  char tmp[1024];
+  bzero(this, sizeof(fs_t));
+  *this = (fs_t){ .fuse_args = FUSE_ARGS_INIT(0, NULL),
+		  .fuse_fd = -1,
+		  .mkdir = false };
+  if (!fsMountPoint(tmp, 1024, NULL)) EEXIT();
+  if (!fsSetMntPt(this, tmp)) EEXIT();
   this->ed = (evntdesc_t){ .obj = this, .hdlr = fsEvent };
-  return true;
-}
-
-extern bool fsSetMntPtdir(fs_t *this, char *dir)
-{
-  char mntpt[1024];
-  if (!fsMountPoint(mntpt, 1024, dir)) EEXIT();
-  if (!fsSetMntPt(this, mntpt)) EEXIT();
   return true;
 }
 
@@ -400,7 +396,7 @@ fsCleanup(fs_t *this)
     }
     if (this->fuse_buf.mem) free(this->fuse_buf.mem);
     rmdir(this->mntpt);
-    free(this->mntpt);
+    if (this->mntpt) free(this->mntpt);
     this->mntpt = NULL;
   }
   return true;

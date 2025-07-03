@@ -3,7 +3,7 @@
 
 extern void cmdDump(cmd_t *this, FILE *f, char *prefix);
 extern bool cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline,
-		    double delay, char *ttylink, char *log);
+		    double delay, char *ttylink, char *log, bool iszeroed);
 extern bool cmdCreate(cmd_t *this);
 extern bool cmdStart(cmd_t *this, bool raw, int epollfd, double startdelay);
 extern bool cmdStop(cmd_t *this, int epollfd, bool force);

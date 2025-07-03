@@ -10,28 +10,7 @@
 // forward declartions
 static evnthdlrrc_t monEvent(void *obj, uint32_t evnts, int epollfd);
 
-globals_t GBLS = {
-  .mon                = { .ed = {.obj = &(GBLS.mon), .hdlr = &monEvent },
-			  .fileptr = NULL, .n = 0, .silent = true },                        
-  .fs                 = { .ed = {.obj = NULL, .hdlr = NULL }, 
-                          .fuse_args = FUSE_ARGS_INIT(0, NULL),
-			  .fuse_buf = { .mem = NULL },
-			  .fuse_se = NULL, .mntpt = NULL, .fuse_fd = -1,
-			  .mkdir = false },
-  .stopstr            = NULL,
-  .slowestcmd         = NULL,
-  .verbose            = 0,
-  .pid                = -1,
-  .cmds               = NULL,
-  .linebufferbcst     = false,
-  .prefixbcst         = false,
-  .bcstflg            = false,
-  .restart            = true,
-  .exitonidle         = false,
-  .defaultcmddelay    = 0.0,
-  .restartcmddelay    = 5.0,
-  .errrestartcmddelay = 10.0
-};
+globals_t GBLS;
 
 static int monExit(int, int);
 static int monAdd(int, int);
@@ -319,14 +298,15 @@ GBLSDump(FILE *f)
   if (f == GBLS.mon.fileptr && GBLS.mon.tty.opens == 0) return;
   fprintf(f, "GBLS.pid=%" PRIdMAX "\n", (intmax_t)GBLS.pid);
   fprintf(f, "GBLS.verbose=%d\n", GBLS.verbose);
+  fprintf(f, "GBLS.logpath=%s GBLS.logfile=%p\n", GBLS.logpath, GBLS.logfile);
   fprintf(f, "GBLS.stopstr=%s\n", GBLS.stopstr);
   fprintf(f, "GBLS.defaultcmddelay=%f\n", GBLS.defaultcmddelay);
   fprintf(f, "GBLS.restartcmddelay=%f\n", GBLS.restartcmddelay);
   fprintf(f, "GBLS.errrestartcmddelay=%f\n", GBLS.errrestartcmddelay);
   fprintf(f, "GBLS: restart=%d linebufferbst:%d prefixbcst:%d bcstflg:%d "
-	  "exitonidle:%d\n",
+	  "exitonidle:%d keeplog:%d\n",
 	  GBLS.restart, GBLS.linebufferbcst, GBLS.prefixbcst, GBLS.bcstflg,
-	  GBLS.exitonidle);
+	  GBLS.exitonidle, GBLS.keeplog);
   ttyDump(&GBLS.bcsttty, stderr, "GBLS.bcsttty: ");
   fprintf(f, "GBLS.cmds:");
   {
@@ -340,19 +320,19 @@ GBLSDump(FILE *f)
   else fprintf(f, "\n");
 }
 
+// modifies the cmdstr string (places nulls at appopriate points)
 static bool
-cmdstrParse(char *cmdstr, char **name, char **cmdline,
-	    double *delay, char **ttylink, char **log)
+cmdspecParse(char *cmdstr, char **name, char **cmdline,
+	    double *delay, char **ttylink, char **log, FILE *f)
 {
-  char *nptr, *orig; // next token pointer, original cmdstr
+  char  *orig=NULL, *nptr=NULL; // next token pointer, original cmdstr
   bool rc=true;
   
-  orig = malloc(strlen(cmdstr));
-  strcpy(orig, cmdstr);
+  orig = strdup(cmdstr);
   
   nptr = strsep(&cmdstr, ",");  // parse name
   if (nptr == NULL || cmdstr == NULL) {
-    EPRINT("Bad command name: %s\n", orig);
+    EPRINT(f, "Bad command name: %s\n", orig);
     rc = false;
     goto done;
   }
@@ -360,7 +340,7 @@ cmdstrParse(char *cmdstr, char **name, char **cmdline,
   
   nptr = strsep(&cmdstr, ",");     // parse ttylink
   if (nptr == NULL || cmdstr == NULL) {
-    EPRINT("Bad ttylink: %s\n", orig);
+    EPRINT(f, "Bad ttylink: %s\n", orig);
     rc = false;
     goto done;
   }
@@ -372,7 +352,7 @@ cmdstrParse(char *cmdstr, char **name, char **cmdline,
 
   nptr = strsep(&cmdstr, ",");     // parse log
   if (nptr == NULL || cmdstr == NULL) {
-    EPRINT("Bad log path: %s\n", orig);
+    EPRINT(f, "Bad log path: %s\n", orig);
     rc = false;
     goto done;
   }
@@ -385,7 +365,7 @@ cmdstrParse(char *cmdstr, char **name, char **cmdline,
 
   nptr = strsep(&cmdstr, ",");   // parse delay value string
   if (nptr == NULL || cmdstr == NULL) {
-    EPRINT("Bad delay: %s\n", orig);
+    EPRINT(f, "Bad delay: %s\n", orig);
     rc = false;
     goto done;
   }
@@ -395,7 +375,7 @@ cmdstrParse(char *cmdstr, char **name, char **cmdline,
     errno = 0;
     *delay = strtod(nptr, NULL);
     if (errno != 0) {
-      perror("bad delay value");
+      EPRINT(f, "bad delay value: errno=%d\n", errno);
       rc = false;
       goto done;
     }
@@ -404,43 +384,35 @@ cmdstrParse(char *cmdstr, char **name, char **cmdline,
   // commandline is everthing that list left (avoid parsing incase command
   // line uses , itself (eg socat)
   if (cmdstr == NULL || *cmdstr == 0) {
-    EPRINT("bad cmdline: command must not be empty: %s\n", orig);
+    EPRINT(f, "bad cmdline: command must not be empty: %s\n", orig);
     rc = false;
     goto done;
   }
   *cmdline=cmdstr;
  done:
-    free(orig);
-    return rc;
+  if (orig) free(orig);
+  return rc;
 }
 
 static bool
-GBLSAddCmd(char *cstr, cmd_t **cmdptr)
+GBLSAddCmd(char *cstr, cmd_t **cmdptr, FILE *f)
 {
   char *cmdstr,*name, *cmdline, *ttylink, *log;
   double delay;
   cmd_t *cmd;
-  size_t n;
   
   // WE ASSUME cmdstr is a properly null terminated string!
-  n=strlen(cstr);
-  if (n==0) {
-    return false;
-  }
-  n=n+1; // add one for null termination
-  cmdstr=malloc(n);
-  strncpy(cmdstr, cstr, n);
-  assert(cmdstr[n]==0);
+  cmdstr=strdup(cstr);
   
-  if (!cmdstrParse(cmdstr, &name, &cmdline, &delay, &ttylink,
-		   &log)) return false;
+  if (!cmdspecParse(cmdstr, &name, &cmdline, &delay, &ttylink,
+		   &log, f)) return false;
   // check to see if name is already used
   HASH_FIND_STR(GBLS.cmds, name, cmd);
   if (cmd == NULL) {
     // new command
     cmd=malloc(sizeof(cmd_t));
-    if (!cmdInit(cmd, cmdstr, name, cmdline, delay, ttylink, log)) {
-      EPRINT("Failed to initCmd(%p,%s,%s,%f,%s,%s)", cmd, name, cmdline,
+    if (!cmdInit(cmd, cmdstr, name, cmdline, delay, ttylink, log, false)) {
+      EPRINT(f, "Failed to initCmd(%p,%s,%s,%f,%s,%s)", cmd, name, cmdline,
 	     delay, ttylink, log);
       free(cmdstr);
       free(cmd);
@@ -461,7 +433,7 @@ GBLSAddCmd(char *cstr, cmd_t **cmdptr)
     HASH_ADD_KEYPTR(hh, GBLS.cmds, cmd->name, strlen(cmd->name), cmd);
     if (cmdptr) *cmdptr = cmd;
   } else {
-    EPRINT("%s: command names must be unique. %s already used:",
+    EPRINT(f, "%s: command names must be unique. %s already used:",
 	   cmdstr, name);
     cmdDump(cmd, stderr, "\n  ");
     return false;
@@ -477,7 +449,7 @@ GBLSCmdsWriteChar(char c)
   HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
     n=cmdWriteChar(cmd, c);
     if ( n != 1 ) {
-      EPRINT("  write returned: n=%d\n", n);
+      EPRINT(stderr, "  write returned: n=%d\n", n);
       NYI;
     }
     if (n) cnt++;
@@ -556,7 +528,7 @@ bcstttyNotify(void *obj, uint32_t mask, int epollfd)
     mask = mask & ~IN_CLOSE;
     break;
   default:
-    EPRINT("Unexpected notify case: mask:0x%x\n",
+    EPRINT(stderr, "Unexpected notify case: mask:0x%x\n",
 	   mask);
     NYI;
   }  
@@ -672,7 +644,7 @@ monAdd(int args, int epollfd)
   if (args != 0) {
     char *cmdstr=&GBLS.mon.line[args];
     cmd_t *cmd;
-    if (GBLSAddCmd(cmdstr, &cmd)) {
+    if (GBLSAddCmd(cmdstr, &cmd, GBLS.mon.fileptr)) {
       if (!cmdRegisterttyEvents(cmd, epollfd)) {
 	monprintf("failed to register ttyEvents (%s)\n", cmdstr);
 	rc = -1;
@@ -785,7 +757,7 @@ monProcess(int epollfd)
 
   // we did not find a null or new line??
   if (cmd[i]!=0) {
-    EPRINT("mon: invalid cmd line: i=%d\n",i);
+    EPRINT(stderr, "mon: invalid cmd line: i=%d\n",i);
     return;
   }
   
@@ -823,7 +795,7 @@ monEvent(void *obj, uint32_t evnts, int epollfd)
     assert(curn <= MON_LINELEN);
     
     if (curn == MON_LINELEN && GBLS.mon.line[curn]!='\n') {
-      EPRINT("exceeded MON_LINELEN=%d...ignoring\n", MON_LINELEN);
+      EPRINT(stderr, "exceeded MON_LINELEN=%d...ignoring\n", MON_LINELEN);
       GBLS.mon.n = 0;
     } else {
       GBLS.mon.n = curn;
@@ -876,7 +848,7 @@ monNotify(void *obj, uint32_t mask, int epollfd)
     mask = mask & ~IN_CLOSE;
     break;
   default:
-    EPRINT("Unexpected notify case: mask:0x%x\n",
+    EPRINT(stderr, "Unexpected notify case: mask:0x%x\n",
 	   mask);
     NYI;
   }  
@@ -926,19 +898,28 @@ monTtyLink(char *link, int n, char *dir)
 }
 
 static void
-monInit()
+monInit(char *dir)
 {
-  char default_montty_link[1024];
-  if (!monTtyLink(default_montty_link, 1024, NULL)) EEXIT();
-  if (!ttyInit(&(GBLS.mon.tty), default_montty_link)) EEXIT();
+  char tmp[1024];
+  
+  bzero(&(GBLS.mon), sizeof(GBLS.mon));
+  GBLS.mon = (mon_t){ .ed = {.obj = &(GBLS.mon), .hdlr = &monEvent },
+		      .fileptr = NULL, .n = 0, .silent = true };
+  if (!monTtyLink(tmp, 1024, dir)) EEXIT();
+  if (!ttyInit(&(GBLS.mon.tty), tmp, true)) EEXIT();
 }
 
-static void
-monTtySetlinkdir(char *dir)
+static bool checkfd(int fd)
 {
-  char link[1024];
-  if (!monTtyLink(link, 1024, dir)) EEXIT();
-  if (!ttySetlink(&(GBLS.mon.tty),link)) EEXIT();
+  struct stat sb;
+  if (fstat(fd, &sb) == -1) {
+    fprintf(stderr, "fstat on %d failed errno=%d\n", fd, errno);
+    if (errno == EBADFD) {
+      fprintf(stderr, "EBADFD: %d\n", fd);
+    }
+    return false;
+  }
+  return true;
 }
 
 #define MAX_EVENTS 1024
@@ -980,13 +961,34 @@ theLoop()
   // loop: detect events and dispatch handlers
   for (;;) {
     struct epoll_event events[MAX_EVENTS];
+    errno = 0;
     int nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
     if (nfds == -1) {
-      perror("epoll_wait");
-      if (errno == EINTR) continue;
+      if (verbose(1)) perror("epoll_wait");
+      if (errno == EINTR) {
+	// process signal handler state
+	if (GBLS.exitsignaled) {
+	  VPRINT("%s: EINTR: Exited Signaled\n", __func__); 
+	  rc = false;
+	  goto done;
+	}
+	VLPRINT(3, "%s: EINTR: Continuing\n", __func__);
+	continue;
+      }
+      if (errno == EINVAL) {
+	// I don't know why this is happening
+	// once we added logging
+	//  trigger -> run yar, ctl-z, bg, enter
+	EPRINT(stderr, "FAIL:errno=%d epollfd=%d ME=%d checkfd=%d\n",
+	       errno, epollfd, MAX_EVENTS, checkfd(epollfd));
+	continue;
+      }
       rc = false;
+      EPRINT(stderr, "FAIL:errno=%d epollfd=%d ME=%d checkfd=%d\n",
+	     errno, epollfd, MAX_EVENTS, checkfd(epollfd));
       goto done;
     }
+    
     for (int n = 0; n < nfds; ++n) {
       evnthdlrrc_t erc;
       evntdesc_t *ed = events[n].data.ptr;
@@ -1003,7 +1005,7 @@ theLoop()
 	rc = true;
 	goto done;
       } else if (erc == EVNT_HDLR_FAILED) {
-	EPRINT("event handler failed hdlr:%p obj:0x%p evnts:%08x\n",
+	EPRINT(stderr, "event handler failed hdlr:%p obj:0x%p evnts:%08x\n",
 	       ed->hdlr, ed->obj, evnts);
 	rc = false;
 	goto done;
@@ -1016,15 +1018,26 @@ theLoop()
   return rc;
 }
 
+// avoid any real work only update GBLS
 static bool
 argsParse(int argc, char **argv)
 {
     int opt;
     
-    while ((opt = getopt(argc, argv, "b:d:e:f:hlm:pr:s:v")) != -1) {
+    while ((opt = getopt(argc, argv, "DKL:b:d:e:f:hlm:pr:s:v")) != -1) {
     switch (opt) {
+    case 'D':
+      GBLS.daemonize = true;
+      break;
+    case 'K':
+      GBLS.keeplog = true;
+      break;
+    case 'L':
+      GBLS.uselog  = true;
+      GBLS.logpath = strdup(optarg);
+      break;
     case 'b':
-      ttySetlink(&(GBLS.bcsttty), optarg);
+      GBLS.bcstttylink = strdup(optarg);
       break;
     case 'd':
       errno = 0;
@@ -1043,7 +1056,7 @@ argsParse(int argc, char **argv)
       }
       break;
     case 'f':
-      fsSetMntPtdir(&(GBLS.fs),optarg);
+      GBLS.fsmntptdir = strdup(optarg);
       break;
     case 'h':
       usage(argv[0],stderr);
@@ -1052,7 +1065,7 @@ argsParse(int argc, char **argv)
       GBLS.linebufferbcst = true;
       break;
     case 'm':
-      monTtySetlinkdir(optarg);
+      GBLS.monttylinkdir = strdup(optarg);
       break;
     case 'p':
       GBLS.prefixbcst = true;
@@ -1066,7 +1079,7 @@ argsParse(int argc, char **argv)
       }
       break;
     case  's':
-      GBLS.stopstr = optarg;
+      GBLS.stopstr = strdup(optarg);
       break;
     case 'v':
       GBLS.verbose++;
@@ -1084,13 +1097,22 @@ argsParse(int argc, char **argv)
   
   for (int i=0; i<anum; i++) {
     VLPRINT(3, "args[%d]=%s\n", i, args[i]);
-    if (!GBLSAddCmd(args[i],NULL)) {
+    char *tmp = strdup(args[i]);
+    char *name, *cmdline, *ttylink, *log;
+    double delay;
+    
+    if (!cmdspecParse(tmp, &name, &cmdline, &delay, &ttylink, &log, stderr)) {
+      // failed to parse cmd spec
+      free(tmp);
       return false;
     }
+    free(tmp);
   }
-  
-  if (anum>1) GBLS.bcstflg=true;
+  GBLS.initialcmdspecs=args;
+  GBLS.initialcmdspecscnt=anum;
 
+  if (anum>1) GBLS.bcstflg=true;
+  
   if (verbose(1)) GBLSDump(stderr); 
   return true;
 }
@@ -1109,15 +1131,113 @@ void cleanup(void)
       free(cmd);
     }
   }
+  GBLS.slowestcmd = NULL;
   fsCleanup(&(GBLS.fs));
   monCleanup();
+  if (GBLS.logfile) {
+    fclose(GBLS.logfile);
+    if (!GBLS.keeplog) {
+      if (!remove(GBLS.logpath)) perror("failed to remove logfile");
+    }
+    GBLS.logfile=NULL;
+  }
+  if (GBLS.logpath) { free(GBLS.logpath); GBLS.logpath=NULL;  }
+  GBLS.initialcmdspecs = NULL;   // points to argv values
+  GBLS.initialcmdspecscnt = 0;
+  if (GBLS.stopstr) { free(GBLS.stopstr); GBLS.stopstr = NULL; }
+  if (GBLS.bcstttylink) { free(GBLS.bcstttylink); GBLS.bcstttylink = NULL; }
+  if (GBLS.monttylinkdir) {
+    free(GBLS.monttylinkdir);
+    GBLS.monttylinkdir = NULL;
+  }
+  if (GBLS.fsmntptdir) { free(GBLS.fsmntptdir); GBLS.fsmntptdir = NULL; }
 }
 
 void
-signalhandler(int num)
+exitsignalhandler(int num)
 {
-  VLPRINT(1, "num:%d\n", num);
-  EEXIT();
+  GBLS.exitsignaled = true;
+}
+
+static bool
+setlogpath(char *dir)
+{
+  int rc;
+  char path[1024];
+  if (dir) {
+    rc = snprintf(path, 1024, "%s/%" PRIdMAX ".log", dir, (intmax_t)GBLS.pid);
+  } else {
+    rc = snprintf(path, 1024, "%" PRIdMAX ".log", (intmax_t)GBLS.pid);
+  }
+  if (rc<0 || rc>=1024) {
+    perror("snprintf");
+    return false;
+  }
+  if (GBLS.logpath) free(GBLS.logpath);
+  GBLS.logpath=strdup(path);
+  return true;
+}
+
+bool 
+openlog(char *dir)
+{
+  setlogpath(dir);
+  VPRINT("SWITCHING stdout and error to %s.\n", GBLS.logpath);
+  if (freopen("/dev/null", "r", stdin) == NULL) {
+    perror("Error redirecting stdin");
+    return false;
+  }
+  if (freopen(GBLS.logpath, "a", stdout) == NULL) {
+    perror("Error redirecting stdout");
+    return false;
+  }
+  setbuf(stdout, NULL);
+
+  // keep copy of log file pointer
+  GBLS.logfile = stdout;
+  VLPRINT(2, "GBLS.logfile=%p\n", GBLS.logfile);
+  
+  if (freopen(GBLS.logpath, "a", stderr) == NULL) {
+    perror("Error redirecting stderr");
+    return false;
+  }
+  setbuf(stderr, NULL);
+
+  return true;
+}
+
+void
+GBLSInit()
+{
+  bzero(&GBLS, sizeof(GBLS));
+
+  GBLS = (globals_t) {
+    .verbose            = 0,
+    .pid                = -1,
+    .linebufferbcst     = false,
+    .prefixbcst         = false,
+    .bcstflg            = false,
+    .restart            = true,
+    .exitonidle         = false,
+    .keeplog            = false,
+    .defaultcmddelay    = 0.0,
+    .restartcmddelay    = 5.0,
+    .errrestartcmddelay = 10.0
+  };  
+}
+
+void setsignalhandlers()
+{
+  signal(SIGALRM, exitsignalhandler);
+  signal(SIGTERM, exitsignalhandler);
+  signal(SIGINT, exitsignalhandler);
+  signal(SIGHUP, exitsignalhandler);
+  signal(SIGKILL, exitsignalhandler);
+  signal(SIGUSR1, exitsignalhandler);
+  signal(SIGVTALRM, exitsignalhandler);
+  signal(SIGUSR2, exitsignalhandler);
+  signal(SIGPIPE, exitsignalhandler);
+  signal(SIGIO, exitsignalhandler);
 }
 
 int main(int argc, char **argv)
@@ -1126,34 +1246,54 @@ int main(int argc, char **argv)
   // correct cleanup behavior incase of early termination
   // the read delay of the broadcast tty will be set to the
   // largest delay of any of the commands
-  GBLS.pid = getpid();
-
-  // init monitor tty
-  monInit();
-
-  // init fs
-  if (!fsInit(&(GBLS.fs))) EEXIT();
-  
-  // init broadcast tty
-  if (!ttyInit(&GBLS.bcsttty, DEFAULT_BCSTTTY_LINK)) EEXIT();
-  
-  atexit(cleanup);
-  signal(SIGTERM, signalhandler);
-  signal(SIGINT, signalhandler);
-
+  GBLSInit();
+  // parse arguments potentially updating GBLS
   if (!argsParse(argc, argv)) EEXIT();
 
-  // create the monitor tty
-  monttyCreate();
-
-  // create the fs
-  if (!fsCreate(&(GBLS.fs), argv[0])) EEXIT();
+  if (GBLS.daemonize) assert(daemon(1,0)==0);
   
+  GBLS.pid = getpid();
+
+  // use log file if needed other stdout, err and in are let
+  // untouched
+  if (GBLS.uselog || GBLS.daemonize) {
+    if (!openlog(GBLS.logpath)) EEXIT();
+  }
+  
+  atexit(cleanup);
+  setsignalhandlers();
+
+  
+  // ok lets start creating resources
+  // create the initial set of command lines from the specs passed in
+  // via argv
+  for (int i=0; i<GBLS.initialcmdspecscnt; i++) {
+    char *cmdspec = GBLS.initialcmdspecs[i];
+    VLPRINT(3, "creating from cmdspec[%d]=%s\n", i, cmdspec);
+    assert(GBLSAddCmd(cmdspec,NULL,stderr));
+  }
+
+  // init broadcast tty
+  if (!ttyInit(&GBLS.bcsttty,
+	       ((GBLS.bcstttylink) ? GBLS.bcstttylink : DEFAULT_BCSTTTY_LINK),
+	       true)) {
+    EEXIT();
+  }
   // create the broadcast tty
   bcstttyCreate();
 
+  // init fs
+  if (!fsInit(&(GBLS.fs), GBLS.fsmntptdir)) EEXIT();
+  // create the fs
+  if (!fsCreate(&(GBLS.fs), argv[0])) EEXIT();
+
+  // init monitor tty
+  monInit(GBLS.monttylinkdir);  
+  // create the monitor tty
+  monttyCreate();
+
   if (!theLoop()) EEXIT();
-  
+
   return EXIT_SUCCESS;
 }
 
