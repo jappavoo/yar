@@ -745,12 +745,13 @@ extern bool
 cmdCleanup(cmd_t *this)
 {
   assert(this);
+  VPRINT("%p: %s %s\n", this, this->name, this->cmdline);
   if (verbose(2)) {
     cmdDump(this, stderr, "clean: ");
   }
   
   cmdStop(this, -1, true);
-  VLPRINT(1, "  exit status=%d\n", this->exitstatus);
+  VLPRINT(2, "  exit status=%d\n", this->exitstatus);
 
   ttyCleanup(&(this->cmdtty));
   ttyCleanup(&(this->clttty));

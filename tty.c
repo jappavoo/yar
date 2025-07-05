@@ -318,7 +318,7 @@ extern bool
 ttyCleanup(tty_t *this)
 {
   assert(this);
-  VLPRINT(1, "closing: %p\n", this);
+  VPRINT("%p: %s %s\n", this, this->path, this->link);
   if (verbose(2)) {
     ttyDump(this, stderr, NULL);
   }

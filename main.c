@@ -320,6 +320,23 @@ GBLSDump(FILE *f)
   else fprintf(f, "\n");
 }
 
+static bool checkpath(char *path, int type)
+{
+  struct stat st;
+  int rc = stat(path, &st);
+  if ( rc == 0) {
+    if (type) {
+      if ((st.st_mode & S_IFMT)==type) {
+	return true;
+      } else {
+	return false;
+      }
+    }
+    return true;
+  } 
+  return false;
+}
+
 // modifies the cmdstr string (places nulls at appopriate points)
 static bool
 cmdspecParse(char *cmdstr, char **name, char **cmdline,
@@ -350,6 +367,13 @@ cmdspecParse(char *cmdstr, char **name, char **cmdline,
     *ttylink = nptr;
   }
 
+  // if the ttylink already exists something went wrong
+  if (checkpath(*ttylink, 0)) {
+    EPRINT(f, "%s already exists.\n", *ttylink);
+    rc = false;
+    goto done;
+  }
+  
   nptr = strsep(&cmdstr, ",");     // parse log
   if (nptr == NULL || cmdstr == NULL) {
     EPRINT(f, "Bad log path: %s\n", orig);
@@ -600,7 +624,7 @@ bcstttyCreate() {
 }
 
 // Monitor CLI code 
-void monGreeting() { monprintf("yar> "); }
+void monGreeting() { monprintf("yar[%d]> ", GBLS.pid); }
 
 int
 monIdleExit(int args, int epollfd)
@@ -630,7 +654,6 @@ int
 monExit(int args, int epollfd)
 {
   VLPRINT(3, "%s:start: args=%d epollfd=%d\n", __func__, args, epollfd);
-  cleanup();
   exit(EXIT_SUCCESS);
   VLPRINT(3, "%s:end: args=%d epollfd=%d\n", __func__, args, epollfd);
   return 0;
@@ -858,6 +881,7 @@ monNotify(void *obj, uint32_t mask, int epollfd)
 void
 monCleanup()
 {
+  VPRINT("%p\n", &(GBLS.mon));
   ttyCleanup(&GBLS.mon.tty);
   GBLS.mon.n = 0;
   GBLS.mon.fileptr = NULL;
@@ -898,15 +922,22 @@ monTtyLink(char *link, int n, char *dir)
 }
 
 static void
-monInit(char *dir)
+monInit(bool initdir, char *dir, bool iszeroed)
 {
   char tmp[1024];
-  
-  bzero(&(GBLS.mon), sizeof(GBLS.mon));
-  GBLS.mon = (mon_t){ .ed = {.obj = &(GBLS.mon), .hdlr = &monEvent },
-		      .fileptr = NULL, .n = 0, .silent = true };
-  if (!monTtyLink(tmp, 1024, dir)) EEXIT();
-  if (!ttyInit(&(GBLS.mon.tty), tmp, true)) EEXIT();
+
+  if (!iszeroed) {
+    bzero(&(GBLS.mon), sizeof(GBLS.mon));
+  }
+  GBLS.mon = (mon_t){ .ed = {.obj = &(GBLS.mon),
+			     .hdlr = &monEvent },
+		      .silent = true };
+  if (initdir) {
+    if (!monTtyLink(tmp, 1024, dir)) EEXIT();
+    if (!ttyInit(&(GBLS.mon.tty), tmp, true)) EEXIT();
+  } else {
+    if (!ttyInit(&(GBLS.mon.tty), NULL, true)) EEXIT();
+  }
 }
 
 static bool checkfd(int fd)
@@ -1038,6 +1069,13 @@ argsParse(int argc, char **argv)
       break;
     case 'b':
       GBLS.bcstttylink = strdup(optarg);
+      if (checkpath(GBLS.bcstttylink, 0)) {
+	fprintf(stderr, "ERROR: %s already exists\n", GBLS.bcstttylink);
+	return false;
+      }
+      // if user explicitly specifies a path for the broadcast tty
+      // the force its creation at startup
+      GBLS.bcstflg=true;
       break;
     case 'd':
       errno = 0;
@@ -1120,12 +1158,12 @@ argsParse(int argc, char **argv)
 extern
 void cleanup(void)
 {
-  VPRINT("%s", "exiting\n");
+  VPRINT("GBLS:%p\n", &GBLS);
   if (GBLS.bcstflg) ttyCleanup(&GBLS.bcsttty);
   {
     cmd_t *cmd, *tmp;
     HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-      VPRINT("cleanup up cmd %s\n", cmd->name);
+      VLPRINT(3, "Cleanup up cmd %s\n", cmd->name);
       cmdCleanup(cmd);
       HASH_DEL(GBLS.cmds, cmd);
       free(cmd);
@@ -1224,7 +1262,13 @@ GBLSInit()
     .defaultcmddelay    = 0.0,
     .restartcmddelay    = 5.0,
     .errrestartcmddelay = 10.0
-  };  
+  };
+  // do an first round of init calls to get things in a sane
+  // state incase we have to call cleanup before these
+  // objects can get configured correctly
+  ttyInit(&(GBLS.bcsttty),NULL,true);
+  fsInit(&(GBLS.fs),false,NULL,true);
+  monInit(false,NULL,true);
 }
 
 void setsignalhandlers()
@@ -1261,9 +1305,8 @@ int main(int argc, char **argv)
     if (!openlog(GBLS.logpath)) EEXIT();
   }
   
-  atexit(cleanup);
+  atexit(cleanup);    // from this point on exits will trigger cleanups 
   setsignalhandlers();
-
   
   // ok lets start creating resources
   // create the initial set of command lines from the specs passed in
@@ -1275,7 +1318,7 @@ int main(int argc, char **argv)
   }
 
   // init broadcast tty
-  if (!ttyInit(&GBLS.bcsttty,
+  if (!ttyInit(&GBLS.bcsttty, 
 	       ((GBLS.bcstttylink) ? GBLS.bcstttylink : DEFAULT_BCSTTTY_LINK),
 	       true)) {
     EEXIT();
@@ -1284,12 +1327,12 @@ int main(int argc, char **argv)
   bcstttyCreate();
 
   // init fs
-  if (!fsInit(&(GBLS.fs), GBLS.fsmntptdir)) EEXIT();
+  if (!fsInit(&(GBLS.fs), true,  GBLS.fsmntptdir, true)) EEXIT();
   // create the fs
   if (!fsCreate(&(GBLS.fs), argv[0])) EEXIT();
 
   // init monitor tty
-  monInit(GBLS.monttylinkdir);  
+  monInit(true, GBLS.monttylinkdir, true);  
   // create the monitor tty
   monttyCreate();
 

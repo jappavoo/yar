@@ -370,15 +370,18 @@ fsSetMntPt(fs_t *this, char *mntpt)
 }
 
 extern bool
-fsInit(fs_t *this, char *mntptrdir)
+fsInit(fs_t *this, bool initmntpt, char *mntptdir, bool iszeroed)
 {
   char tmp[1024];
-  bzero(this, sizeof(fs_t));
+  if (!iszeroed) {
+    bzero(this, sizeof(fs_t));
+  }
   *this = (fs_t){ .fuse_args = FUSE_ARGS_INIT(0, NULL),
-		  .fuse_fd = -1,
-		  .mkdir = false };
-  if (!fsMountPoint(tmp, 1024, NULL)) EEXIT();
-  if (!fsSetMntPt(this, tmp)) EEXIT();
+		  .fuse_fd = -1 };
+  if (initmntpt) {
+    if (!fsMountPoint(tmp, 1024, mntptdir)) EEXIT();
+    if (!fsSetMntPt(this, tmp)) EEXIT();
+  } 
   this->ed = (evntdesc_t){ .obj = this, .hdlr = fsEvent };
   return true;
 }
@@ -386,6 +389,7 @@ fsInit(fs_t *this, char *mntptrdir)
 extern bool
 fsCleanup(fs_t *this)
 {
+  VPRINT("%p\n", this);
   if (this->mntpt && this->mkdir) {  
     if (this->fuse_se) {
       fuse_session_unmount(this->fuse_se);

@@ -216,13 +216,15 @@ typedef struct {
 extern globals_t GBLS;
 
 extern void cleanup();
+
+// Error print
 #define EPRINT(f, fmt, ...) {						\
     if (f==GBLS.mon.fileptr) { monprintf("%s: " fmt, __func__, __VA_ARGS__); } \
     else fprintf(f, "%s: " fmt, __func__, __VA_ARGS__);			\
   }
 
+// Error Exit
 static inline void EEXIT() {
-  cleanup();
   exit(EXIT_FAILURE);
 }
 
