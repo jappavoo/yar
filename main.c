@@ -1295,10 +1295,15 @@ int main(int argc, char **argv)
   // parse arguments potentially updating GBLS
   if (!argsParse(argc, argv)) EEXIT();
 
-  if (GBLS.daemonize) assert(daemon(1,0)==0);
+  // daemonize: do NOT change directory or close stdin,out,err
+  if (GBLS.daemonize) assert(daemon(1,1)==0);
   
   GBLS.pid = getpid();
 
+  // report pid to stdout before closing original stdout, err and in
+  printf("%" PRIdMAX "\n", (intmax_t)GBLS.pid);
+  fflush(stdout);
+  
   // use log file if needed other stdout, err and in are let
   // untouched
   if (GBLS.uselog || GBLS.daemonize) {
