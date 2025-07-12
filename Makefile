@@ -1,4 +1,4 @@
-SRCS       := main.c tty.c cmd.c fs.c hexdump.c
+SRCS       := main.c tty.c cmd.c fs.c yarfs.c hexdump.c
 OBJS       := $(SRCS:%.c=%.o)
 O          :=0
 CFLAGS     += -g -O${O} -std=gnu99 -MD -MP -Wall \

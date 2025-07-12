@@ -1,0 +1,4 @@
+while read fs; do fusermount3 -u $fs; done < <(printf "%s\n" *.fs)
+rmdir *.fs
+rm *.log
+rm *.mon

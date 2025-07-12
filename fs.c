@@ -1,119 +1,13 @@
-
-#include <inttypes.h>
-
 #include "yar.h"
 
-// JA: FIXME the following needs to be used
-//    in all fs operations right things are just
-//    hard coded
-fs_file_t fs_files[] = {
-  [0] =         { .name =  NULL,   .ino = -1, .usage = NULL },
-  #define DOT_INO 1
-  [DOT_INO] =   { .name = ".",     .ino = DOT_INO, .usage = NULL },
-  #define CMDS_INO 2
-  [CMDS_INO] =  { .name = "cmds",  .ino = CMDS_INO,
-  .usage = "reading this file returns the names of the current command lines."},
-  #define LCMDS_INO 3
-  [LCMDS_INO] = { .name = "lcmds", .ino = LCMDS_INO,
-  .usage = NULL},
-  { .name =  NULL, .usage = NULL, .ino = -1 },
-};
-
-extern void
-fsusage(FILE *fp)
-{
-  for (int i=1;;i++) {
-    if (fs_files[i].name == NULL) return;
-    else {
-      if (fs_files[i].usage) {
-	if (fp == GBLS.mon.fileptr) {
-	  monprintf("\t%s\t%s\n", fs_files[i].name, fs_files[i].usage);
-	} else {
-	  fprintf(fp, "\t%s\t%s\n", fs_files[i].name, fs_files[i].usage);
-	}
-      }
-    }
-  }
-}
-
-static off_t cmdNamesSize()
-{
-  cmd_t *cmd, *tmp;
-  off_t n = 0;
-  HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-    n+=strlen(cmd->name)+1;
-  }
-  return n;
-}
-
-static int fs_stat(fuse_ino_t ino, struct stat *stbuf)
-{
-  stbuf->st_ino = ino;
-  switch (ino) {
-  case 1:
-    stbuf->st_mode = S_IFDIR | 0755;
-    stbuf->st_nlink = 2;
-    break;
-
-  case CMDS_INO:
-    stbuf->st_mode = S_IFREG | 0444;
-    stbuf->st_nlink = 1;
-    stbuf->st_size = cmdNamesSize();
-    break;
-
-  default:
-    return -1;
-  }
-  return 0;
-}
-
-static void fs_ll_init(void *userdata, struct fuse_conn_info *conn)
-{
-  (void)userdata;
-
-  /* Disable the receiving and processing of FUSE_INTERRUPT requests */
-  //	conn->no_interrupt = 1;
-
-  /* Test setting flags the old way */
-  conn->want = FUSE_CAP_ASYNC_READ;
-  conn->want &= ~FUSE_CAP_ASYNC_READ;
-}
-
-static void fs_ll_getattr(fuse_req_t req, fuse_ino_t ino,
-			  struct fuse_file_info *fi)
-{
-  struct stat stbuf;
-
-  (void) fi;
-
-  memset(&stbuf, 0, sizeof(stbuf));
-  if (fs_stat(ino, &stbuf) == -1)
-    fuse_reply_err(req, ENOENT);
-  else
-    fuse_reply_attr(req, &stbuf, 1.0);
-}
-
-static void fs_ll_lookup(fuse_req_t req, fuse_ino_t parent,
-			      const char *name)
-{
-  struct fuse_entry_param e;
-
-  if (parent != 1 || strcmp(name, fs_files[CMDS_INO].name) != 0)
-    fuse_reply_err(req, ENOENT);
-  else {
-    memset(&e, 0, sizeof(e));
-    e.ino = 2;
-    e.attr_timeout = 1.0;
-    e.entry_timeout = 1.0;
-    fs_stat(e.ino, &e.attr);
-
-    fuse_reply_entry(req, &e);
-  }
-}
-
+/************ MISC SUPPORT CODE DIRECTLY TAKEN FROM FUSE EXAMPLE CODE **********
+ * the next two functions are directly taken from the fuse example code to
+ * send a data back to the fuse kernel module.... these may require work
+ * if one needs to send more than a page of data back
+ ******************************************************************************/
 struct dirbuf {
-  char *p;
-  size_t size;
+	char *p;
+	size_t size;
 };
 
 static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name,
@@ -131,8 +25,8 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name,
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
 
-static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
-			     off_t off, size_t maxsize)
+extern int fsFuseReplyBufLimited(fuse_req_t req, const char *buf,
+				 size_t bufsize, off_t off, size_t maxsize)
 {
   if (off < bufsize)
     return fuse_reply_buf(req, buf + off,
@@ -140,84 +34,419 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
   else
     return fuse_reply_buf(req, NULL, 0);
 }
+/******************************************************************************/
 
-static void fs_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
-			  off_t off, struct fuse_file_info *fi)
+
+/**************** FILE SYSTEM SEMANTICS AND SUPPORT CODE **********************
+ * These are the core routines that allow you to construct a simple synthetic
+ * file system on top of fuse for your program.  The core object is a fs_file_t.
+ * see fs.h for details.  To implement a file or directory simply write
+ * your own implementation and register it with a path at creation time or
+ * dynamically if you need to.
+ *****************************************************************************/
+static void
+file_init(fs_file_t *this, fs_ino_t ino, fs_ino_t dir, void *data,
+	     const char *name, fs_filetype_t type, bool malloced,
+	     const fs_fileops_t *ops)
 {
-  (void) fi;
+  if (malloced) bzero(this, sizeof(fs_file_t));
+  this->ops      = ops;
+  this->data     = data;
+  this->name     = strdup(name);
+  this->ino      = ino;
+  this->dir      = dir;
+  this->type     = type;
+  this->malloced = malloced;
+}
 
-  if (ino != 1)
-    fuse_reply_err(req, ENOTDIR);
-  else {
-    struct dirbuf b;
+static void
+file_clean(fs_t *this, fs_file_t *file)
+{
+  switch (file->type) {
+  case REGULAR:
+  case SYMLINK:
+    fsRemovefile(this, file);
+    break;
+  case DIRECTORY:
+    fsRemovedir(this, file);
+    break;
+  default:
+    assert(0);
+  }
+}
+		    
+static fs_ino_t
+inodesc2ino(const fs_t *this, const fs_inodesc_t *id)
+{
+  assert(id >= &(this->ino_table[0]) &&
+	 id <= &(this->ino_table[this->ino_num-1]));
+  return (ino_t) (id - &this->ino_table[0]);
+}
 
-    memset(&b, 0, sizeof(b));
-    dirbuf_add(req, &b, ".", 1);
-    dirbuf_add(req, &b, "..", 1);
-    dirbuf_add(req, &b, fs_files[CMDS_INO].name, CMDS_INO);
-    reply_buf_limited(req, b.p, b.size, off, size);
-    free(b.p);
+static fs_inodesc_t *
+ino2inodesc(const fs_t *this, const fs_ino_t ino)
+{
+  assert(ino >= 0 && ino < this->ino_num);
+  return &(this->ino_table[ino]);
+}
+
+static void
+init_inotable(fs_t *this)
+{
+  fs_inodesc_t *ino_table=NULL;
+  int ino_num=0;
+  assert(this->ino_table == NULL && this->ino_num == 0);
+  ino_table = malloc(4096);
+  ino_num   = 4096/sizeof(fs_inodesc_t);
+  for (int i=0; i<(ino_num-1); i++) {
+    ino_table[i].file = NULL;
+    ino_table[i].next = &ino_table[i+1];
+  }
+  ino_table[ino_num-1].file = NULL;
+  ino_table[ino_num-1].next = NULL;
+  this->ino_table           = ino_table;
+  this->ino_num             = ino_num;
+  this->ino_freelist        = this->ino_table;
+}
+
+static void
+grow_inotable(const fs_t *this)
+{
+  NYI;
+}
+
+static fs_ino_t
+inoalloc(fs_t *this)
+{
+  if (this->ino_table == NULL) init_inotable(this);
+  if (!this->ino_freelist) grow_inotable(this);
+  fs_inodesc_t *id = this->ino_freelist;
+  this->ino_freelist = id->next;
+  id->next = NULL;
+  assert(id->file==NULL);
+  return inodesc2ino(this, id);
+}
+
+static bool
+inofree(fs_t *this, const fs_ino_t ino)
+{
+  fs_inodesc_t *id = ino2inodesc(this, ino);
+  assert(id->next == NULL);
+  id->next = this->ino_freelist;
+  this->ino_freelist = id;
+  return true;
+}
+
+static bool
+dir_add(const fs_file_t *dir, fs_file_t *item)
+{
+  VLPRINT(2, "dir:%s (%ld)  item:%s (%ld)\n", dir->name, dir->ino,
+	  item->name, item->ino);
+  assert(dir->type == DIRECTORY && dir->data);
+  fs_dir_t *dd = dir->data;
+  if (item->name) {
+      fs_file_t *tmp;
+      HASH_FIND(hh_ino, dd->ino_files, &item->ino, sizeof(item->ino), tmp);
+      if (tmp!=NULL) {
+	VLPRINT(2, "%ld (%s) ino not unique in %s\n", item->ino, item->name,
+		dir->name);
+	return false;
+      }
+      HASH_FIND(hh_name, dd->nm_files, item->name, strlen(item->name), tmp);
+      if (tmp!=NULL) {
+	VLPRINT(2, "%s (%ld) ino not unique in %s\n", item->name, item->ino,
+	        dir->name);		
+	return false;
+      }
+      HASH_ADD(hh_ino, dd->ino_files, ino, sizeof(item->ino), item);
+      HASH_ADD_KEYPTR(hh_name, dd->nm_files, item->name, strlen(item->name),
+		      item);
+      VLPRINT(2, "ino:%ld name:%s added to %s (%ld)\n", item->ino, item->name,
+	      dir->name, dir->ino);
+      return true;
+  }
+  VLPRINT(2, "%s (%ld) : Failed to add name null\n", dir->name, dir->ino);
+  return false;
+}
+
+
+fs_file_t *
+fsCreatedir(fs_t *this, const fs_ino_t parentino, const char *name,
+	    const fs_fileops_t *ops)
+{
+  fs_file_t *dir, *parent = NULL;
+  fs_ino_t ino            = inoalloc(this);
+  fs_inodesc_t *pid, *id  = ino2inodesc(this, ino);
+  
+  assert(id->file == NULL && id->next == NULL);
+
+  if (parentino != INVALID_INO) {
+    pid = ino2inodesc(this, parentino);
+    assert(pid && pid->next == NULL && pid->file->type == DIRECTORY);
+    parent = pid->file;
+  }
+  dir = malloc(sizeof(fs_file_t));
+  fs_dir_t *dirdata = malloc(sizeof(fs_dir_t));
+  bzero(dirdata, sizeof(fs_dir_t));
+  file_init(dir, ino, parentino, dirdata, name, DIRECTORY, true, ops);  
+  if (parent) {
+    dir_add(parent, dir);
+  }
+  id->file = dir;
+  return dir;
+}
+  
+
+bool
+fsRemovedir(fs_t *this, const fs_file_t *dir)
+{
+  NYI;
+  return true;
+}
+
+fs_file_t *
+fsCreatefile(fs_t *this, const fs_ino_t dirino, const char *name,
+	     const char *symlink, const fs_fileops_t *ops)
+{
+  fs_file_t   *file, *dir;
+  fs_ino_t           ino = inoalloc(this);
+  fs_inodesc_t *did, *id = ino2inodesc(this, ino);
+  char         *filedata = NULL;
+  fs_filetype_t     type = REGULAR;
+  
+  assert(id->file == NULL && id->next == NULL);
+
+  assert(dirino != INVALID_INO);
+  did = ino2inodesc(this, dirino);
+  
+  assert(did && did->next == NULL && did->file->type == DIRECTORY);
+  dir = did->file;
+
+  if (symlink) {
+    filedata = strdup(symlink);
+    type     = SYMLINK;
+  }
+  
+  file = malloc(sizeof(fs_file_t));
+  file_init(file, ino, dirino, filedata, name, type, true, ops);  
+
+  dir_add(dir, file);
+  id->file = file;
+  
+  return file;
+}
+
+bool
+fsRemovefile(fs_t *this, const fs_file_t *file)
+{
+  NYI;
+  return true;
+}
+
+static bool
+fs_dir_stat(fs_t *this, fs_file_t *dir, struct stat *stbuf)
+{
+  VLPRINT(2, "%s (%ld)\n", dir->name, dir->ino);
+  stbuf->st_mode = S_IFDIR | 0755;
+  stbuf->st_nlink = 2;
+  return true;
+}
+
+static bool
+fs_dir_readdir(fs_t *this, fs_file_t *dir, fuse_req_t req, size_t size,
+	       off_t off)
+{
+  struct dirbuf b;
+  
+  bzero(&b, sizeof(b));
+  dirbuf_add(req, &b, ".", dir->ino);
+  dirbuf_add(req, &b, "..", dir->dir);
+  //  dirbuf_add(req, &b, fs_files[CMDS_INO].name, CMDS_INO);
+  {
+    fs_dir_t *dd = dir->data;
+    fs_file_t *item, *tmp;
+    HASH_ITER(hh_ino, dd->ino_files, item, tmp) {
+      dirbuf_add(req, &b, item->name, item->ino);
+      VLPRINT(2, "%s %ld added to directory list\n", item->name, item->ino);
+    }
+  }
+  fsFuseReplyBufLimited(req, b.p, b.size, off, size);
+  free(b.p);
+  
+  return true;
+}
+
+fs_fileops_t fs_dir_ops = {
+  .stat    = fs_dir_stat,
+  .open    = NULL,
+  .read    = NULL,
+  .write   = NULL,
+  .readdir = fs_dir_readdir
+};
+
+
+/************ FUSE INTERFACE CALL BACK ROUTINES ******************************
+ * These routines are invoked by the fuse lib and provide the bridge between
+ * your specific file and directory semantics.  Using the fs objects
+ * inode table they convert an inode to a fs_file_t object and when appropriate
+ * pass the call on to the file objects operation function (see fs_fileops_t)
+ * This is a very minimal set and may need to be expanded if you need to 
+ * provide more complete file system semantics -- this code was derived
+ * from the minimal fuse example code for implementing a file system
+ * with a single file.
+ *****************************************************************************/
+static void fs_fuse_init(void *userdata, struct fuse_conn_info *conn)
+{
+  fs_t *this = userdata; 
+  VLPRINT(2, "this=%p userdata=%p conn=%p\n", this, userdata, conn);
+  (void)this;
+  // copied from fuse example code
+  conn->want = FUSE_CAP_ASYNC_READ;
+  conn->want &= ~FUSE_CAP_ASYNC_READ;
+}
+
+void fs_fuse_lookup(fuse_req_t req, fuse_ino_t dirino, const char *name)
+{
+  struct fuse_entry_param e;
+  fs_t *this = fuse_req_userdata(req);
+  fs_inodesc_t *did;
+  fs_file_t *file;
+  fs_dir_t  *dir;
+  VLPRINT(2, "this=%p dirino=%lu name=%s\n", this, dirino, name); 
+
+  did = ino2inodesc(this, dirino);
+  
+  if (did->next != NULL || did->file->type != DIRECTORY) {
+      fuse_reply_err(req, ENOENT);
+  } else {
+    dir = did->file->data;
+    HASH_FIND(hh_name, dir->nm_files, name, strlen(name), file);
+    if (file == NULL) {
+      fuse_reply_err(req, ENOENT);
+    } else {
+      bzero(&e, sizeof(e));
+      e.ino = file->ino;
+      e.attr_timeout = 1.0;
+      e.entry_timeout = 1.0;
+      file->ops->stat(this, file, &e.attr);
+      fuse_reply_entry(req, &e);
+    }
   }
 }
 
-static void fs_ll_open(fuse_req_t req, fuse_ino_t ino,
-			    struct fuse_file_info *fi)
+void fs_fuse_getattr(fuse_req_t req, fuse_ino_t ino,
+		     struct fuse_file_info *fi)
 {
-  if (ino != 2)
-    fuse_reply_err(req, EISDIR);
-  else if ((fi->flags & O_ACCMODE) != O_RDONLY)
+  struct stat stbuf;
+  fs_t *this = fuse_req_userdata(req);
+  fs_file_t *file;
+  fs_inodesc_t *id;
+  (void) fi;
+  
+  VLPRINT(2, "this:%p ino:%ld fi=%p\n", this, ino, fi);
+
+  id = ino2inodesc(this, ino);
+  if (id->next != NULL) {
+    fuse_reply_err(req, ENOENT);
+  } else {
+    file = id->file;
+    assert(file);
+    memset(&stbuf, 0, sizeof(stbuf));
+    file->ops->stat(this, file, &stbuf);
+    fuse_reply_attr(req, &stbuf, 1.0);
+  }
+}
+
+void fs_fuse_readlink(fuse_req_t req, fuse_ino_t ino) { NYI; }
+
+void fs_fuse_open(fuse_req_t req, fuse_ino_t ino,
+		  struct fuse_file_info *fi)
+{
+  fs_t *this = fuse_req_userdata(req);
+  fs_file_t *file;
+  fs_inodesc_t *id;
+  (void) fi;
+  
+  VLPRINT(2, "this:%p ino:%ld fi=%p\n", this, ino, fi);
+
+  id = ino2inodesc(this, ino);
+  assert(id->file != NULL && id->next == NULL);
+  file = id->file;
+  if (file->ops->open) {
+    file->ops->open(this, file, req);
+  } else {
+    if (file->type == DIRECTORY) {
+      fuse_reply_err(req, EISDIR);
+    } else if ((fi->flags & O_ACCMODE) != O_RDONLY) {
+      fuse_reply_err(req, EACCES);
+    } else
+      fuse_reply_open(req, fi);
+  }
+}
+
+void fs_fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
+		  struct fuse_file_info *fi)
+{
+  fs_t *this = fuse_req_userdata(req);
+  fs_file_t *file;
+  fs_inodesc_t *id;
+  (void) fi;
+
+  VLPRINT(2, "this:%p ino:%ld size=%lu off=%lu fi=%p\n", this, ino, size,
+	  off, fi);
+
+  id = ino2inodesc(this, ino);
+  assert(id->file != NULL && id->next == NULL);
+  file = id->file;
+
+  assert(file->ops->read);
+  if (!file->ops->read(this, file, req, size, off)) {
     fuse_reply_err(req, EACCES);
-  else
-    fuse_reply_open(req, fi);
-}
-
-
-static void fs_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
-			    off_t off, struct fuse_file_info *fi)
-{
-  (void) fi;
-
-  assert(ino == 2);
-  off_t  n = cmdNamesSize();
-  char *next, *buf = malloc(n);
-  cmd_t *cmd, *tmp;
-
-  next=buf;
-  HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-    next=stpcpy(next, cmd->name);
-    *next='\n';
-    next++;
   }
-
-  int rc=reply_buf_limited(req, buf, n, off, size);
-  if (rc!=0) fprintf(stderr, "fuse_reply_buf failed: %d", rc);
-    
-  free(buf);
 }
 
-static void fs_ll_getxattr(fuse_req_t req, fuse_ino_t ino,
-			    const char *name, size_t size)
+void fs_fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
+		   size_t size, off_t off, struct fuse_file_info *fi)
 {
-  (void)size;
-  assert(ino == 1 || ino == 2);
-  if (strcmp(name, "fs_ll_getxattr_name") == 0)
-    {
-      const char *buf = "fs_ll_getxattr_value";
-      fuse_reply_buf(req, buf, strlen(buf));
-    }
-  else
-    {
-      fuse_reply_err(req, ENOTSUP);
-    }
+  fs_file_t *file = (fs_file_t *)fi->fh;
+  (void)file;
+  NYI;
 }
 
-static void fs_ll_setxattr(fuse_req_t req, fuse_ino_t ino,
-			   const char *name, const char *value,
-			   size_t size, int flags)
+
+void fs_fuse_readdir(fuse_req_t req, fuse_ino_t dirino, size_t size, off_t off,
+		     struct fuse_file_info *fi)
 {
-  (void)flags;
-  (void)size;
-  assert(ino == 1 || ino == 2);
+  fs_t          *this = fuse_req_userdata(req);
+  fs_inodesc_t  *did;
+  (void) fi;
+  
+  VLPRINT(2, "this:%p dirino:%ld size=%lu off=%lu fi=%p\n", this, dirino, size,
+	  off, fi);
+
+  did = ino2inodesc(this, dirino);
+  if (did->next != NULL || did->file->type != DIRECTORY) {
+      fuse_reply_err(req, ENOENT);
+  } else {
+    fs_file_t *dir = did->file;
+    assert(dir->ops->readdir);
+    if (!dir->ops->readdir(this, dir, req, size, off)) {
+      fuse_reply_err(req, ENOENT);
+    }
+  }
+}
+
+void fs_fuse_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
+		      const char *value, size_t size, int flags)
+{
+  fs_t *this = fuse_req_userdata(req);
+  fs_inodesc_t *id;
+  
+  VLPRINT(2, "this:%p ino:%ld name=%s value=%s size=%ld flags=%d\n",
+	  this, ino, name, value, size, flags);
+
+  id = ino2inodesc(this, ino);
+  assert(id->file != NULL && id->next == NULL);
   const char* exp_val = "fs_ll_setxattr_value";
   if (strcmp(name, "fs_ll_setxattr_name") == 0 &&
       strlen(exp_val) == size &&
@@ -231,10 +460,36 @@ static void fs_ll_setxattr(fuse_req_t req, fuse_ino_t ino,
     }
 }
 
-static void fs_ll_removexattr(fuse_req_t req, fuse_ino_t ino,
+void
+fs_fuse_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
+		 size_t size)
+{
+  fs_t *this = fuse_req_userdata(req);
+  fs_inodesc_t *id;
+  
+  VLPRINT(2, "this:%p ino:%ld name=%s size=%ld\n", this, ino, name, size);
+
+  id = ino2inodesc(this, ino);
+  assert(id->file != NULL && id->next == NULL);
+  if (strcmp(name, "fs_ll_getxattr_name") == 0) {
+    const char *buf = "fs_ll_getxattr_value";
+    fuse_reply_buf(req, buf, strlen(buf));
+  } else {
+    fuse_reply_err(req, ENOTSUP);
+  }
+}
+
+static void fs_fuse_removexattr(fuse_req_t req, fuse_ino_t ino,
 			      const char *name)
 {
-  assert(ino == 1 || ino == 2);
+  fs_t *this = fuse_req_userdata(req);
+  fs_inodesc_t *id;
+  
+  VLPRINT(2, "this:%p ino:%ld name=%s\n",  this, ino, name);
+  
+  id = ino2inodesc(this, ino);
+  assert(id->file != NULL && id->next == NULL);
+
   if (strcmp(name, "fs_ll_removexattr_name") == 0)
     {
       fuse_reply_err(req, 0);
@@ -245,17 +500,51 @@ static void fs_ll_removexattr(fuse_req_t req, fuse_ino_t ino,
     }
 }
 
-static const struct fuse_lowlevel_ops fs_ll_oper = {
-  .init        = fs_ll_init,
-  .lookup      = fs_ll_lookup,
-  .getattr     = fs_ll_getattr,
-  .readdir     = fs_ll_readdir,
-  .open        = fs_ll_open,
-  .read        = fs_ll_read,
-  .setxattr    = fs_ll_setxattr,
-  .getxattr    = fs_ll_getxattr,
-  .removexattr = fs_ll_removexattr,
+static const struct fuse_lowlevel_ops fs_fuse_ops = {
+  .init            = fs_fuse_init,
+  .destroy         = NULL,
+  .lookup          = fs_fuse_lookup,
+  .forget          = NULL,
+  .getattr         = fs_fuse_getattr,
+  .setattr         = NULL,
+  .readlink        = fs_fuse_readlink,
+  .mknod           = NULL,
+  .unlink          = NULL,
+  .rmdir           = NULL,
+  .symlink         = NULL,
+  .rename          = NULL,
+  .link            = NULL,
+  .open            = fs_fuse_open,
+  .read            = fs_fuse_read,
+  .write           = fs_fuse_write,
+  .flush           = NULL,
+  .release         = NULL,
+  .fsync           = NULL,
+  .opendir         = NULL,
+  .readdir         = fs_fuse_readdir,
+  .releasedir      = NULL,
+  .fsyncdir        = NULL,
+  .setxattr        = fs_fuse_setxattr,
+  .getxattr        = fs_fuse_getxattr,
+  .listxattr       = NULL,
+  .removexattr     = fs_fuse_removexattr,
+  .access          = NULL,
+  .create          = NULL,
+  .getlk           = NULL,
+  .setlk           = NULL,
+  .bmap            = NULL,
+  .ioctl           = NULL,
+  .poll            = NULL,
+  .write_buf       = NULL,
+  .retrieve_reply  = NULL,
+  .forget_multi    = NULL,
+  .flock           = NULL,
+  .fallocate       = NULL,
+  .readdirplus     = NULL,
+  .copy_file_range = NULL,
+  .lseek           = NULL
 };
+/*****************************************************************************/
 
 
 static evnthdlrrc_t
@@ -313,7 +602,7 @@ fsRegisterEvents(fs_t *this, int epollfd)
 }
 
 extern bool
-fsCreate(fs_t *this, char *name)
+fsCreate(fs_t *this, char *name, fs_createfsfunc_t createfsfunc)
 {
   ASSERT(this);
   // mkdir
@@ -322,10 +611,33 @@ fsCreate(fs_t *this, char *name)
     return false;
   }
   this->mkdir = true;
+
+  // allocate the 0th ino to reserve it as invalid 
+  fs_ino_t ino=inoalloc(this);
+  assert(ino == 0 && ino == INVALID_INO);
+
+  // allocate the 1st ino for the root directory (".") of the file system
+  fs_file_t *root = fsCreatedir(this, INVALID_INO, ".", &fs_dir_ops);
+  assert(root->ino == 1);
+
+  if (createfsfunc)  createfsfunc(this, root->ino);
+  
+  // must pass at least one argument as the name
   fuse_opt_add_arg(&this->fuse_args, name);
-	
-  this->fuse_se = fuse_session_new(&this->fuse_args, &fs_ll_oper,
-				   sizeof(fs_ll_oper), NULL);
+
+  // let fuse / kernel deal with mount permissions
+  fuse_opt_add_arg(&this->fuse_args, "-o");  
+  fuse_opt_add_arg(&this->fuse_args, "default_permissions");
+
+  // turn on fuse debug message if we are verbose level 2
+  if (verbose(2)) {
+    fuse_opt_add_arg(&this->fuse_args, "--debug");
+  } 
+                                                             
+  this->fuse_se = fuse_session_new(&this->fuse_args, &fs_fuse_ops,
+				   sizeof(fs_fuse_ops),
+				   this                           // userdata
+				   );
   assert(this->fuse_se);
 
   if (fuse_session_mount(this->fuse_se, this->mntpt) != 0) {
@@ -402,6 +714,22 @@ fsCleanup(fs_t *this)
     rmdir(this->mntpt);
     if (this->mntpt) free(this->mntpt);
     this->mntpt = NULL;
+    if (this->ino_table) {
+      assert(this->ino_num);
+      for (int i=0; i<this->ino_num; i++) {
+	// scan an clean
+	fs_inodesc_t *id= &(this->ino_table[i]);
+	if (id->file) {
+	  assert(id->next == NULL);
+	  file_clean(this, id->file);
+	  inofree(this, inodesc2ino(this, id));
+	}
+      }
+      this->ino_table    = NULL;
+      this->ino_num      = 0;
+      this->ino_freelist = NULL;
+    }
   }
   return true;
 }
+

@@ -273,10 +273,10 @@ usage(char *name, FILE *fp)
   "by default will be in the working directory that 'yar' was started in.\n"
   "use the '-f <dir>' option to explicitly set the location.  In this\n"
   "in this directory you will find files that let you interact with the 'yar'\n"
-	  "process.  The folling documents after the files.\n",
+	  "process.  The folling documents these files.\n",
 	  	  name, DEFAULT_BCSTTTY_LINK,
 	  GBLS.defaultcmddelay, GBLS.restartcmddelay, GBLS.errrestartcmddelay);
-  fsusage(fp);
+  yarfsUsage(fp);
 	  
   fprintf(fp, 
   "\nMonitor: In addition to controlling 'yar' via its command line arguments\n"
@@ -1334,7 +1334,7 @@ int main(int argc, char **argv)
   // init fs
   if (!fsInit(&(GBLS.fs), true,  GBLS.fsmntptdir, true)) EEXIT();
   // create the fs
-  if (!fsCreate(&(GBLS.fs), argv[0])) EEXIT();
+  if (!fsCreate(&(GBLS.fs), argv[0], yarfsCreate)) EEXIT();
 
   // init monitor tty
   monInit(true, GBLS.monttylinkdir, true);  
