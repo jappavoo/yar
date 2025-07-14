@@ -361,8 +361,8 @@ cmdspecParse(char *cmdstr, char **name, char **cmdline,
     rc = false;
     goto done;
   }
-  if (*nptr == 0) { // none specified
-    *ttylink = *name;
+  if (*nptr == 0) { // none specified leave NULL for cmd init to sort out
+    *ttylink = NULL;
   } else {
     *ttylink = nptr;
   }
@@ -924,7 +924,7 @@ monTtyLink(char *link, int n, char *dir)
 static void
 monInit(bool initdir, char *dir, bool iszeroed)
 {
-  char tmp[1024];
+  char tmp[PATH_MAX];
 
   if (!iszeroed) {
     bzero(&(GBLS.mon), sizeof(GBLS.mon));
@@ -933,7 +933,7 @@ monInit(bool initdir, char *dir, bool iszeroed)
 			     .hdlr = &monEvent },
 		      .silent = true };
   if (initdir) {
-    if (!monTtyLink(tmp, 1024, dir)) EEXIT();
+    if (!monTtyLink(tmp, PATH_MAX, dir)) EEXIT();
     if (!ttyInit(&(GBLS.mon.tty), tmp, true)) EEXIT();
   } else {
     if (!ttyInit(&(GBLS.mon.tty), NULL, true)) EEXIT();
@@ -1189,6 +1189,7 @@ void cleanup(void)
     GBLS.monttylinkdir = NULL;
   }
   if (GBLS.fsmntptdir) { free(GBLS.fsmntptdir); GBLS.fsmntptdir = NULL; }
+  if (GBLS.cwd) { free(GBLS.cwd); GBLS.cwd = NULL; }
 }
 
 void
@@ -1202,7 +1203,7 @@ static bool
 setlogpath(char *dir)
 {
   int rc;
-  char path[1024];
+  char path[PATH_MAX];
   if (dir) {
     rc = snprintf(path, 1024, "%s/%" PRIdMAX ".log", dir, (intmax_t)GBLS.pid);
   } else {
@@ -1271,6 +1272,15 @@ GBLSInit()
   monInit(false,NULL,true);
 }
 
+char * cwdPrefix(const char *path) {
+  if (path) {
+    char npath[PATH_MAX];
+    snprintf(npath, PATH_MAX, "%s/%s", GBLS.cwd, path);
+    return strdup(npath);
+  }
+  return strdup(GBLS.cwd);
+}
+
 void setsignalhandlers()
 {
   signal(SIGALRM, exitsignalhandler);
@@ -1299,7 +1309,8 @@ int main(int argc, char **argv)
   if (GBLS.daemonize) assert(daemon(1,1)==0);
   
   GBLS.pid = getpid();
-
+  GBLS.cwd = getcwd(NULL,0);   // memory is malloced
+  
   // report pid to stdout before closing original stdout, err and in
   printf("%" PRIdMAX "\n", (intmax_t)GBLS.pid);
   fflush(stdout);
@@ -1307,7 +1318,7 @@ int main(int argc, char **argv)
   // use log file if needed other stdout, err and in are let
   // untouched
   if (GBLS.uselog || GBLS.daemonize) {
-    if (!openlog(GBLS.logpath)) EEXIT();
+    if (!openlog((GBLS.logpath))? GBLS.logpath : GBLS.cwd) EEXIT();
   }
   
   atexit(cleanup);    // from this point on exits will trigger cleanups 
@@ -1323,20 +1334,22 @@ int main(int argc, char **argv)
   }
 
   // init broadcast tty
-  if (!ttyInit(&GBLS.bcsttty, 
-	       ((GBLS.bcstttylink) ? GBLS.bcstttylink : DEFAULT_BCSTTTY_LINK),
-	       true)) {
-    EEXIT();
+  if (GBLS.bcstttylink == NULL) {
+    GBLS.bcstttylink = cwdPrefix(DEFAULT_BCSTTTY_LINK); // mallocs
   }
+  if (!ttyInit(&GBLS.bcsttty, GBLS.bcstttylink, true)) EEXIT();
+ 
   // create the broadcast tty
   bcstttyCreate();
 
   // init fs
+  if (GBLS.fsmntptdir==NULL) GBLS.fsmntptdir = cwdPrefix(NULL); // mallocs
   if (!fsInit(&(GBLS.fs), true,  GBLS.fsmntptdir, true)) EEXIT();
   // create the fs
   if (!fsCreate(&(GBLS.fs), argv[0], yarfsCreate)) EEXIT();
 
   // init monitor tty
+  if (GBLS.monttylinkdir) GBLS.monttylinkdir = cwdPrefix(NULL); // mallocs
   monInit(true, GBLS.monttylinkdir, true);  
   // create the monitor tty
   monttyCreate();

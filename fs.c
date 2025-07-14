@@ -58,22 +58,6 @@ file_init(fs_file_t *this, fs_ino_t ino, fs_ino_t dir, void *data,
   this->type     = type;
   this->malloced = malloced;
 }
-
-static void
-file_clean(fs_t *this, fs_file_t *file)
-{
-  switch (file->type) {
-  case REGULAR:
-  case SYMLINK:
-    fsRemovefile(this, file);
-    break;
-  case DIRECTORY:
-    fsRemovedir(this, file);
-    break;
-  default:
-    assert(0);
-  }
-}
 		    
 static fs_ino_t
 inodesc2ino(const fs_t *this, const fs_inodesc_t *id)
@@ -107,6 +91,7 @@ init_inotable(fs_t *this)
   this->ino_table           = ino_table;
   this->ino_num             = ino_num;
   this->ino_freelist        = this->ino_table;
+  this->ino_numfree         = ino_num;
 }
 
 static void
@@ -119,10 +104,15 @@ static fs_ino_t
 inoalloc(fs_t *this)
 {
   if (this->ino_table == NULL) init_inotable(this);
-  if (!this->ino_freelist) grow_inotable(this);
+  if (!this->ino_freelist) {
+    assert(this->ino_numfree == 0);
+    grow_inotable(this);
+  }
   fs_inodesc_t *id = this->ino_freelist;
   this->ino_freelist = id->next;
   id->next = NULL;
+  this->ino_numfree--;
+  assert(this->ino_numfree >= 0);
   assert(id->file==NULL);
   return inodesc2ino(this, id);
 }
@@ -134,6 +124,7 @@ inofree(fs_t *this, const fs_ino_t ino)
   assert(id->next == NULL);
   id->next = this->ino_freelist;
   this->ino_freelist = id;
+  this->ino_numfree++;
   return true;
 }
 
@@ -197,13 +188,6 @@ fsCreatedir(fs_t *this, const fs_ino_t parentino, const char *name,
 }
   
 
-bool
-fsRemovedir(fs_t *this, const fs_file_t *dir)
-{
-  NYI;
-  return true;
-}
-
 fs_file_t *
 fsCreatefile(fs_t *this, const fs_ino_t dirino, const char *name,
 	     const char *symlink, const fs_fileops_t *ops)
@@ -236,19 +220,85 @@ fsCreatefile(fs_t *this, const fs_ino_t dirino, const char *name,
   return file;
 }
 
-bool
-fsRemovefile(fs_t *this, const fs_file_t *file)
+// works for all types
+extern bool
+fsRemoveitem(fs_t *this, fs_file_t *item, const bool purgeemptydir)
 {
-  NYI;
+  fs_file_t *containingdir  = NULL;
+  fs_inodesc_t *containingid;
+  fs_dir_t     *dir;
+  int icnt, ncnt;
+  bool containingdirempty = false;
+  VLPRINT(2, "this=%p item=%p item->name=%s purge=%d\n", this, item, item->name,
+	  purgeemptydir);
+  if (item->type == DIRECTORY) {
+    dir      = item->data;
+    icnt = HASH_CNT(hh_ino, dir->ino_files);
+    ncnt = HASH_CNT(hh_name, dir->nm_files);
+    assert(icnt == ncnt);
+    if (icnt != 0) return false;   // if directory not empty then fail 
+    if (item->ino != ROOT_INO) {
+      // unless root directory find containing directory
+      containingid = ino2inodesc(this, item->dir);
+      assert(containingid->next == NULL && containingid->file != NULL);
+      assert(containingid->file->type == DIRECTORY);
+      containingdir = containingid->file;
+    } else {
+      assert(item->dir == INVALID_INO);
+    }
+  } else {
+    assert(item->ino != ROOT_INO && item->dir != INVALID_INO);
+    containingid = ino2inodesc(this, item->dir);
+    assert(containingid->next == NULL && containingid->file != NULL);
+    assert(containingid->file->type == DIRECTORY);
+    containingdir = containingid->file;
+  }
+  // take care of containing directory -- if there is one
+  if (containingdir) {
+    dir = containingdir->data;
+    icnt = HASH_CNT(hh_ino, dir->ino_files);
+    ncnt = HASH_CNT(hh_name, dir->nm_files);
+    assert(icnt == ncnt);
+    assert(icnt > 0);
+    fs_file_t *tmp;
+    HASH_FIND(hh_ino, dir->ino_files, &item->ino, sizeof(item->ino), tmp);
+    assert(tmp == item);
+    HASH_DELETE(hh_ino, dir->ino_files, tmp);
+    HASH_FIND(hh_name, dir->nm_files, item->name, strlen(item->name), tmp);
+    assert(tmp == item);
+    HASH_DELETE(hh_name, dir->nm_files, tmp);
+    icnt = HASH_CNT(hh_ino, dir->ino_files);
+    ncnt = HASH_CNT(hh_name, dir->nm_files);
+    assert(icnt == ncnt);
+    if (icnt == 0) containingdirempty=true;
+  }
+  inofree(this,item->ino);      // free item's inode (put back on free list)
+
+  // for easier debugging we clear all pointer fields that are not malloced
+  // to help catch uses after free 
+  item->ops     = NULL;
+  item->ino     = INVALID_INO;
+  item->dir     = INVALID_INO;
+  item->type    = NONE;
+  if (item->data) { free(item->data); item->data = NULL; }
+  if (item->name) { free((char *)item->name); item->name = NULL; }
+  if (item->malloced) free(item);
+
+  // if we have a containing directory that is now empty
+  // and we are supposed to purge them then do so
+  if (containingdir && containingdirempty && purgeemptydir) {
+    fsRemoveitem(this, containingdir, purgeemptydir);
+  }
+  
   return true;
 }
-
+  
 static bool
 fs_dir_stat(fs_t *this, fs_file_t *dir, struct stat *stbuf)
 {
   VLPRINT(2, "%s (%ld)\n", dir->name, dir->ino);
   stbuf->st_mode = S_IFDIR | 0755;
-  stbuf->st_nlink = 2;
+  stbuf->st_nlink = 2;      // FIXME: and link count support
   return true;
 }
 
@@ -618,7 +668,7 @@ fsCreate(fs_t *this, char *name, fs_createfsfunc_t createfsfunc)
 
   // allocate the 1st ino for the root directory (".") of the file system
   fs_file_t *root = fsCreatedir(this, INVALID_INO, ".", &fs_dir_ops);
-  assert(root->ino == 1);
+  assert(root->ino == ROOT_INO);
 
   if (createfsfunc)  createfsfunc(this, root->ino);
   
@@ -715,19 +765,28 @@ fsCleanup(fs_t *this)
     if (this->mntpt) free(this->mntpt);
     this->mntpt = NULL;
     if (this->ino_table) {
+      int removed=0;
+      int allocated = this->ino_num - this->ino_numfree;
       assert(this->ino_num);
       for (int i=0; i<this->ino_num; i++) {
-	// scan an clean
+	// scan and clean
 	fs_inodesc_t *id= &(this->ino_table[i]);
 	if (id->file) {
 	  assert(id->next == NULL);
-	  file_clean(this, id->file);
-	  inofree(this, inodesc2ino(this, id));
+	  fs_file_t *file = id->file;
+	  fsRemoveitem(this, file, true);
+	  removed++;
 	}
       }
+      inofree(this, INVALID_INO);
+      removed++;
+      assert(removed==allocated);
+      assert(this->ino_num == this->ino_numfree);
+      free(this->ino_table);
       this->ino_table    = NULL;
       this->ino_num      = 0;
       this->ino_freelist = NULL;
+      this->ino_numfree  = 0;
     }
   }
   return true;

@@ -476,8 +476,10 @@ extern bool
 cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
 	char *ttylink, char *log, bool iszeroed)
 {
-  // name, cmdline, ttylink and log are supposed to be offsets within
-  // cmdstr ---> freeing cmdstr is the right way to release the resouce
+  // name, cmdline, and log are supposed to be offsets within
+  // cmdstr ---> freeing cmdstr is the right way to release the resource
+  // ttylink if not null then will also be an offset but if it is null
+  // then logic here will set it to the command name prefixed by cwd
   if (log != NULL) NYI;             // need to open log and add write to it ;-)
   assert(cmdstr && name && cmdline);
   if (!iszeroed) bzero(this, sizeof(cmd_t));        // zero everthing;
@@ -502,7 +504,13 @@ cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
   this->lastwrite.tv_nsec = 0;
   this->pidfded           = (evntdesc_t){ NULL, NULL };
   ttyInit(&(this->cmdtty), NULL, true);
-  ttyInit(&(this->clttty), ttylink, true);
+  if (ttylink) {
+    ttyInit(&(this->clttty), ttylink, true);
+  } else {
+    ttylink = cwdPrefix(name);
+    ttyInit(&(this->clttty), ttylink, true);
+    free(ttylink);
+  }
   return true;
 }
 

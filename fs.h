@@ -5,6 +5,7 @@ struct fs;
 struct fs_filedesc; 
 typedef fuse_ino_t fs_ino_t;
 #define INVALID_INO 0
+#define ROOT_INO 1
 
 typedef  void (*fs_createfsfunc_t)(struct fs *fs, fs_ino_t rootino);
 typedef  bool (*fs_statfunc_t)(struct fs *, struct fs_filedesc *, struct stat *);
@@ -25,6 +26,10 @@ typedef struct {
 
 typedef enum { NONE=0, REGULAR=1, SYMLINK=2, DIRECTORY=3 } fs_filetype_t;
 
+// fixme add hard link count tracking (every subdirectory should add one to link
+// count of parent). On creation a directory will have a link count of 2 +1 for
+// '.' entry and +1 for the parent having an entry for the new).  New files
+// will have a link count of 1. 
 struct fs_filedesc {
   UT_hash_handle      hh_ino;   // ino hashtable handle
   UT_hash_handle      hh_name;  // name hashtable handle
@@ -59,17 +64,17 @@ typedef struct fs {
   fs_inodesc_t        *ino_table;
   fs_inodesc_t        *ino_freelist;
   int                  ino_num;
+  int                  ino_numfree;
   int                  fuse_fd;
   bool                 mkdir;     // true after mkdir of mount point happens  
 } fs_t;
 
 extern fs_file_t *fsCreatedir(fs_t *this, const fs_ino_t parent,
 			      const char *name, const fs_fileops_t *ops);
-extern bool fsRemovedir(fs_t *this, const fs_file_t *dir);
-extern fs_file_t * fsCreatefile(fs_t *this, const fs_ino_t dirino,
+extern fs_file_t *fsCreatefile(fs_t *this, const fs_ino_t dirino,
 				const char *name, const char *symlink,
 				const fs_fileops_t *ops);
-extern bool fsRemovefile(fs_t *this, const fs_file_t *file);
+extern bool fsRemoveitem(fs_t *this, fs_file_t *item, const bool purgeemptydir);
 extern bool fsRegisterEvents(fs_t *this, int epollfd);
 extern bool fsCreate(fs_t *this, char *name, fs_createfsfunc_t cf);
 extern bool fsInit(fs_t *this, bool initmtpt, char *mntptdir, bool iszeroed);

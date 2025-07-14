@@ -21,6 +21,7 @@
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <inttypes.h>
+#include <limits.h>
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 12)
 #include <fuse_lowlevel.h>
 
@@ -81,6 +82,7 @@ typedef struct {
   char **initialcmdspecs;     // cmd specs passed as command line args
   char  *stopstr;             // a string to send to a command line when
                               // stopping
+  char  *cwd;                 // current working directory path
   char  *bcstttylink;         // path of broadcast tty link
   char  *monttylinkdir;       // path of directory that monitor tty should be in
   char  *fsmntptdir;          // path of directory that yar fs should be in
@@ -169,6 +171,7 @@ extern void fdSetnonblocking(int fd);
 
 extern void delaysec(double delay);
 
+extern char * cwdPrefix(const char *path);
 
 
 #define NYI { fprintf(stderr, "%s: %d: NYI\n", __func__, __LINE__); assert(0); }

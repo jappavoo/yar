@@ -58,7 +58,7 @@ typedef struct {
 
 extern void ttyDump(tty_t *this, FILE *f, char *prefix);
 extern bool ttyInit(tty_t *this, char *ttylink, bool iszeroed);
-extern bool ttySetlink(tty_t *this, char *ttylink);
+//extern bool ttySetlink(tty_t *this, char *ttylink);
 extern bool ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw);
 extern bool ttyRegisterEvents(tty_t *this, int epollfd);
 extern bool ttyCleanup(tty_t *this);

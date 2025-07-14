@@ -86,23 +86,12 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
 }
 
 extern bool
-ttySetlink(tty_t *this, char *ttylink)
-{  
-  assert(this);
-  if (this->link) free(this->link);
-  if (ttylink == NULL) { this->link = NULL; return true; }
-  // WE ASSUME ttylink is a properly null terminated string!
-  this->link = strdup(ttylink);
-  assert(this->link);
-  return true;
-}
- 
-extern bool
 ttyInit(tty_t *this, char *ttylink, bool iszeroed)
 {
   if (!iszeroed) bzero(this, sizeof(tty_t));
   // all other values are now zeroed 
   // a non null tty link means the tty is a client tty see ttyIsClient in .h
+  assert(this->link == NULL); // there has been a lot of churn so for my sanity
   this->link     = (ttylink) ? strdup(ttylink) : NULL;  
   this->dfd      = -1;
   this->sfd      = -1;
