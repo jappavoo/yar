@@ -6,8 +6,8 @@
  * if one needs to send more than a page of data back
  ******************************************************************************/
 struct dirbuf {
-	char *p;
-	size_t size;
+  char *p;
+  size_t size;
 };
 
 static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name,
@@ -159,7 +159,6 @@ dir_add(const fs_file_t *dir, fs_file_t *item)
   VLPRINT(2, "%s (%ld) : Failed to add name null\n", dir->name, dir->ino);
   return false;
 }
-
 
 fs_file_t *
 fsCreatedir(fs_t *this, const fs_ino_t parentino, const char *name,
@@ -333,7 +332,6 @@ fs_fileops_t fs_dir_ops = {
   .write   = NULL,
   .readdir = fs_dir_readdir
 };
-
 
 /************ FUSE INTERFACE CALL BACK ROUTINES ******************************
  * These routines are invoked by the fuse lib and provide the bridge between
