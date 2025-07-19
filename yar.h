@@ -86,7 +86,8 @@ typedef struct {
   char  *bcstttylink;         // path of broadcast tty link
   char  *monttylinkdir;       // path of directory that monitor tty should be in
   char  *fsmntptdir;          // path of directory that yar fs should be in
-  char  *logpath;             // path of log used when daemonized
+  char  *logdir;              // path of directory that yar log should be in
+  char  *logpath;             // path of log used when daemonized (logdir/<pid>.log)
   FILE  *logfile;             // file pointer of log when daemonized
   double defaultcmddelay;     // default value for sending data to commands
   double restartcmddelay;     // delay restarting command if exited with success

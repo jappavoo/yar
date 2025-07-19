@@ -1065,7 +1065,7 @@ argsParse(int argc, char **argv)
       break;
     case 'L':
       GBLS.uselog  = true;
-      GBLS.logpath = strdup(optarg);
+      GBLS.logdir  = strdup(optarg);
       break;
     case 'b':
       GBLS.bcstttylink = strdup(optarg);
@@ -1179,6 +1179,7 @@ void cleanup(void)
     }
     GBLS.logfile=NULL;
   }
+  if (GBLS.logdir) { free(GBLS.logdir); GBLS.logpath= NULL; }
   if (GBLS.logpath) { free(GBLS.logpath); GBLS.logpath=NULL;  }
   GBLS.initialcmdspecs = NULL;   // points to argv values
   GBLS.initialcmdspecscnt = 0;
@@ -1205,11 +1206,11 @@ setlogpath(char *dir)
   int rc;
   char path[PATH_MAX];
   if (dir) {
-    rc = snprintf(path, 1024, "%s/%" PRIdMAX ".log", dir, (intmax_t)GBLS.pid);
+    rc = snprintf(path, PATH_MAX, "%s/%" PRIdMAX ".log", dir, (intmax_t)GBLS.pid);
   } else {
-    rc = snprintf(path, 1024, "%" PRIdMAX ".log", (intmax_t)GBLS.pid);
+    rc = snprintf(path, PATH_MAX, "%" PRIdMAX ".log", (intmax_t)GBLS.pid);
   }
-  if (rc<0 || rc>=1024) {
+  if (rc<0 || rc>=PATH_MAX) {
     perror("snprintf");
     return false;
   }
@@ -1219,7 +1220,7 @@ setlogpath(char *dir)
 }
 
 bool 
-openlog(char *dir)
+logopen(char *dir)
 {
   setlogpath(dir);
   VPRINT("SWITCHING stdout and error to %s.\n", GBLS.logpath);
@@ -1318,7 +1319,8 @@ int main(int argc, char **argv)
   // use log file if needed other stdout, err and in are let
   // untouched
   if (GBLS.uselog || GBLS.daemonize) {
-    if (!openlog((GBLS.logpath))? GBLS.logpath : GBLS.cwd) EEXIT();
+    if (GBLS.logdir==NULL) GBLS.logdir = cwdPrefix(NULL);
+    if (!logopen(GBLS.logdir)) EEXIT();
   }
   
   atexit(cleanup);    // from this point on exits will trigger cleanups 
