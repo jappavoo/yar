@@ -710,7 +710,7 @@ fsMountPoint(char *mntpt, int n, char *dir)
   } else {
     rc = snprintf(mntpt, n, "%" PRIdMAX ".fs",  (intmax_t)GBLS.pid);    
   }
-  if (rc < 0 || rc >= 1024) {
+  if (rc < 0 || rc >= n) {
     perror("snprintf"); 
     return false;
   }
@@ -732,14 +732,14 @@ fsSetMntPt(fs_t *this, char *mntpt)
 extern bool
 fsInit(fs_t *this, bool initmntpt, char *mntptdir, bool iszeroed)
 {
-  char tmp[1024];
+  char tmp[PATH_MAX];
   if (!iszeroed) {
     bzero(this, sizeof(fs_t));
   }
   *this = (fs_t){ .fuse_args = FUSE_ARGS_INIT(0, NULL),
 		  .fuse_fd = -1 };
   if (initmntpt) {
-    if (!fsMountPoint(tmp, 1024, mntptdir)) EEXIT();
+    if (!fsMountPoint(tmp, sizeof(tmp), mntptdir)) EEXIT();
     if (!fsSetMntPt(this, tmp)) EEXIT();
   } 
   this->ed = (evntdesc_t){ .obj = this, .hdlr = fsEvent };
