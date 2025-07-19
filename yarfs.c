@@ -9,9 +9,9 @@ void
 yarfsUsage(FILE *fp)
 {
   fprintf(fp,
-	  " /cmds  : readonly file : contents is current command names\n"
-	  " /lcmds : readonly file : contents is detailed long listing of"
-	  " current commands\n"
+	  " /cmds  : readonly file : contents is list of current command names\n"
+	  " /lcmds : readonly file : contents is long list of"
+	  " current commands (name,tty,command line)\n"
 	  " /bcst  : readonly file : path of broadcast tty if enabled\n");
 }
 
