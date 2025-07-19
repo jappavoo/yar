@@ -74,7 +74,9 @@ static off_t cmdsInfoSize()
   cmd_t *cmd, *tmp;
   off_t n = 0;
   HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
-    n+=strlen(cmd->name)+1;
+    n+=strlen(cmd->name)+1;          // +1 for comma
+    n+=strlen(cmd->clttty.link)+1;   // +1 for comma
+    n+=strlen(cmd->cmdline)+1;       // +1 for newline
   }
   return n;
 }
@@ -102,6 +104,12 @@ fs_lcmds_read(fs_t *this, fs_file_t *file, fuse_req_t req, size_t size,
   next=buf;
   HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
     next=stpcpy(next, cmd->name);
+    *next=',';
+    next++;
+    next=stpcpy(next, cmd->clttty.link);
+    *next=',';
+    next++;
+    next=stpcpy(next, cmd->cmdline);
     *next='\n';
     next++;
   }
