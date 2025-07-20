@@ -11,7 +11,7 @@ yarfsUsage(FILE *fp)
   fprintf(fp,
 	  " /cmds  : readonly file : contents is list of current command names\n"
 	  " /lcmds : readonly file : contents is long list of"
-	  " current commands (name,tty,command line)\n"
+	  " current commands (name,tty,yarpid,command line)\n"
 	  " /bcst  : readonly file : path of broadcast tty if enabled\n");
 }
 
@@ -72,10 +72,17 @@ fs_fileops_t fs_cmds_ops = {
 static off_t cmdsInfoSize()
 {
   cmd_t *cmd, *tmp;
+  char pidstr[24];
+  int pidstrlen;
   off_t n = 0;
+
+  pidstrlen = snprintf(pidstr, sizeof(pidstr), "%" PRIdMAX, (intmax_t)GBLS.pid);
+  assert(pidstrlen > 0);
+  
   HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
     n+=strlen(cmd->name)+1;          // +1 for comma
     n+=strlen(cmd->clttty.link)+1;   // +1 for comma
+    n+=(pidstrlen+1);                // +1 for comma
     n+=strlen(cmd->cmdline)+1;       // +1 for newline
   }
   return n;
@@ -100,6 +107,11 @@ fs_lcmds_read(fs_t *this, fs_file_t *file, fuse_req_t req, size_t size,
   off_t  n = cmdsInfoSize();
   char *next, *buf = malloc(n);
   cmd_t *cmd, *tmp;
+  char pidstr[24];
+  int pidstrlen;
+
+  pidstrlen = snprintf(pidstr, sizeof(pidstr), "%" PRIdMAX, (intmax_t)GBLS.pid);
+  assert(pidstrlen > 0);
   
   next=buf;
   HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
@@ -107,6 +119,9 @@ fs_lcmds_read(fs_t *this, fs_file_t *file, fuse_req_t req, size_t size,
     *next=',';
     next++;
     next=stpcpy(next, cmd->clttty.link);
+    *next=',';
+    next++;
+    next=stpcpy(next, pidstr);
     *next=',';
     next++;
     next=stpcpy(next, cmd->cmdline);
