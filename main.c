@@ -1362,7 +1362,7 @@ int main(int argc, char **argv)
   if (!fsCreate(&(GBLS.fs), argv[0], yarfsCreate)) EEXIT();
 
   // init monitor tty
-  if (GBLS.monttylinkdir) GBLS.monttylinkdir = cwdPrefix(NULL); // mallocs
+  if (GBLS.monttylinkdir==NULL) GBLS.monttylinkdir = cwdPrefix(NULL); // mallocs
   monInit(true, GBLS.monttylinkdir, true);  
   // create the monitor tty
   monttyCreate();
