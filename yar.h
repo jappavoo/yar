@@ -105,6 +105,8 @@ typedef struct {
   bool   restart;             // globally controls if commands should be 
 			      // restarted
   bool   exitonidle;          // exit if all commands are removed
+  bool   cmddelonexit;        // global value for new commands to delete if the
+                              // exit
   bool   keeplog;             // do not delete log on exit
   bool   exitsignaled;        // set by signal handlers to trigger exit logic in
                               // theLoop

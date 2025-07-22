@@ -499,7 +499,7 @@ cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
   this->exitstatus        = -1;
   this->restartcnt        = 0;
   this->restart           = true;           
-  this->deleteonexit      = GBLS.exitonidle; 
+  this->deleteonexit      = GBLS.cmddelonexit; 
   this->lastwrite.tv_sec  = 0;
   this->lastwrite.tv_nsec = 0;
   this->pidfded           = (evntdesc_t){ NULL, NULL };

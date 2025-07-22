@@ -269,6 +269,10 @@ usage(char *name, FILE *fp)
   "    stopping it.  If specified a newline will always be prepended.\n"
   " -v increase debug message verbosity.  This option can be used\n"
   "    multiple times to the verbosity Eg. -v versus -vv etc.\n"
+  " -x exit if there are no commands left (eg. all commands get deleted).\n"
+  "    If no commands were specified on commandline -x will NOT force \n"
+  "    an immediate termination.  Rather exit will only occur if commands get\n"
+  "    added and deleted.\n"
   " -D run in Daemon mode (disconnect from tty and send stdout and stderr to\n"
   "    a log file (unless -L is specified the log file will be placed in the\n"
   "    current working directory).  See -L and -K.\n"
@@ -315,9 +319,9 @@ GBLSDump(FILE *f)
   fprintf(f, "GBLS.restartcmddelay=%f\n", GBLS.restartcmddelay);
   fprintf(f, "GBLS.errrestartcmddelay=%f\n", GBLS.errrestartcmddelay);
   fprintf(f, "GBLS: restart=%d linebufferbst:%d prefixbcst:%d bcstflg:%d "
-	  "exitonidle:%d keeplog:%d\n",
+	  "exitonidle:%d cmddelonexit:%d keeplog:%d\n",
 	  GBLS.restart, GBLS.linebufferbcst, GBLS.prefixbcst, GBLS.bcstflg,
-	  GBLS.exitonidle, GBLS.keeplog);
+	  GBLS.exitonidle, GBLS.cmddelonexit, GBLS.keeplog);
   ttyDump(&GBLS.bcsttty, stderr, "GBLS.bcsttty: ");
   fprintf(f, "GBLS.cmds:");
   {
@@ -521,7 +525,6 @@ fdSetnonblocking(int fd)
   assert(flags!=-1);
 }
 
-
 void 
 bcstttyRegisterEvents(int epollfd)
 {
@@ -642,7 +645,8 @@ monIdleExit(int args, int epollfd)
 {
   VLPRINT(3, "%s:start: args=%d epollfd=%d\n", __func__, args, epollfd);
   
-  GBLS.exitonidle = true;
+  GBLS.exitonidle   = true;   // set policy 
+  GBLS.cmddelonexit = true;   // any new commands should delete if the exit 
   // if we are idle (no commands) exit  now 
   if (HASH_COUNT(GBLS.cmds) == 0) {
     cleanup();
@@ -1066,7 +1070,7 @@ argsParse(int argc, char **argv)
 {
     int opt;
     
-    while ((opt = getopt(argc, argv, "DKL:b:d:e:f:hlm:pr:s:v")) != -1) {
+    while ((opt = getopt(argc, argv, "DKL:b:d:e:f:hlm:pr:s:vx")) != -1) {
     switch (opt) {
     case 'D':
       GBLS.daemonize = true;
@@ -1132,6 +1136,9 @@ argsParse(int argc, char **argv)
       break;
     case 'v':
       GBLS.verbose++;
+      break;
+    case 'x':
+      GBLS.exitonidle=true;
       break;
     default:
       usage(argv[0],stderr);
@@ -1271,6 +1278,7 @@ GBLSInit()
     .bcstflg            = false,
     .restart            = true,
     .exitonidle         = false,
+    .cmddelonexit       = false,
     .keeplog            = false,
     .defaultcmddelay    = 0.0,
     .restartcmddelay    = 5.0,
