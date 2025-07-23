@@ -44,7 +44,15 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
       break;
     case IN_CLOSE_WRITE:
     case IN_CLOSE_NOWRITE:
-      this->opens--;
+      // seem to be getting a close without having seen an open ...
+      // lets assume we lost the open but the close is real so go ahead
+      // and pass it along to down stream handlers and assume they can deal
+      if (this->opens>0) this->opens--;
+      else {
+	EPRINT(stderr, "ERROR: %s: %s(%s): got a close when opens=0\n",
+	       (ttyIsCmdtty(this)) ? "cmdtty" : "clttty", this->link, this->path
+	       );
+      }
       VLPRINT(1, "%s: %s(%s): CLOSED: opens=%d\n",
 	      (ttyIsCmdtty(this)) ? "cmdtty" : "clttty", this->link, this->path,
 	      this->opens);
