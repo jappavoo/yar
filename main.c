@@ -2,6 +2,7 @@
 #include "yar.h"
 #include <getopt.h>
 #include <signal.h>
+#include <sys/signalfd.h>
 #include <fcntl.h>
 #include <inttypes.h>
 
@@ -871,7 +872,7 @@ monEvent(void *obj, uint32_t evnts, int epollfd)
 }
 
 
-evnthdlrrc_t
+static evnthdlrrc_t
 monNotify(void *obj, uint32_t mask, int epollfd)
 {
   mon_t *this = obj;
@@ -893,7 +894,7 @@ monNotify(void *obj, uint32_t mask, int epollfd)
   return EVNT_HDLR_SUCCESS;
 }
 
-void
+static void
 monCleanup()
 {
   VPRINT("%p\n", &(GBLS.mon));
@@ -902,7 +903,7 @@ monCleanup()
   GBLS.mon.fileptr = NULL;
 }
 
-void
+static void
 monttyCreate() {
   evntdesc_t ed  = { .obj = &(GBLS.mon), .hdlr = monEvent  };
   evntdesc_t ned = { .obj = &(GBLS.mon), .hdlr = monNotify };
@@ -955,6 +956,117 @@ monInit(bool initdir, char *dir, bool iszeroed)
   }
 }
 
+static evnthdlrrc_t
+sigEvent(void *obj, uint32_t evnts, int epollfd)
+{
+  sigproc_t *this = obj;
+  assert(this == &GBLS.sigproc);
+  int          fd = this->sfd;
+  evnthdlrrc_t rc = EVNT_HDLR_SUCCESS;
+  
+  VLPRINT(3,"START: sigproc: fd:%d evnts:0x%08x\n", fd, evnts);
+  if (evnts & EPOLLIN) {
+    struct signalfd_siginfo fdsi;
+    ssize_t                 s;
+    s = read(fd, &fdsi, sizeof(fdsi));
+    assert(s==sizeof(fdsi));
+    switch (fdsi.ssi_signo) {
+    case SIGALRM:
+    case SIGTERM:
+    case SIGINT:
+    case SIGHUP:
+    case SIGKILL:
+    case SIGUSR1:
+    case SIGVTALRM:
+    case SIGUSR2:
+    case SIGPIPE:
+    case SIGIO:
+      // exit yar if any of this signals occur
+      VPRINT("exiting on signal event %d (%s)\n",
+	     fdsi.ssi_signo, strsignal(fdsi.ssi_signo));
+      rc = EVNT_HDLR_EXIT_LOOP;
+      break;
+    default:
+      EPRINT(stderr, "unknown signal event: %d\n", fdsi.ssi_signo);
+    }
+    evnts = evnts & ~EPOLLIN;
+    if (evnts==0) goto done;
+  }
+  if (evnts & EPOLLHUP) {
+    VLPRINT(2,"EPOLLHUP(%x)\n", EPOLLHUP);
+    evnts = evnts & ~EPOLLHUP;
+    if (evnts==0) goto done;
+  }
+  if (evnts & EPOLLRDHUP) {
+    VLPRINT(2,"EPOLLRDHUP(%x)\n", EPOLLRDHUP);
+    evnts = evnts & ~EPOLLRDHUP;
+    if (evnts==0) goto done;
+  }
+  if (evnts & EPOLLERR) {
+    VLPRINT(2,"EPOLLERR(%x)\n", EPOLLERR);
+    evnts = evnts & ~EPOLLRDHUP;
+    if (evnts==0) goto done;
+  }
+  if (evnts != 0) {
+    VLPRINT(2,"unknown events evnts:%x", evnts);
+  }
+ done:
+  VLPRINT(3, "END: sigproc: fd:%d evnts:0x%08x\n", fd, evnts);
+  return rc;
+}
+
+static void
+sigprocRegisterEvents(sigproc_t *this, int epollfd)
+{
+  struct epoll_event ev;
+  ASSERT(this && epollfd != -1);
+  ASSERT(this->sfd != -1 && this->ed.obj == this && this->ed.hdlr == sigEvent);
+  ev.data.ptr = &(this->ed);
+  ev.events  = EPOLLIN | EPOLLET; // Edge
+  if (epoll_ctl(epollfd, EPOLL_CTL_ADD, this->sfd, &ev) == -1 ) {
+      perror("epoll_ctl: this->sffd");
+      assert(0);
+  }    
+}
+
+static void
+sigprocInit(sigproc_t *this, bool iszeroed)
+{
+  if (!iszeroed) bzero(this, sizeof(*this));
+  this->sfd = -1;
+  this->ed  = (evntdesc_t){ .obj = this, .hdlr=sigEvent }; 
+
+  sigemptyset(&this->mask);
+  // block all the signals so that we avoid standard signal handling
+  // behavior --> we will use a signal fd to convert them into events
+  sigaddset(&this->mask, SIGALRM);
+  sigaddset(&this->mask, SIGTERM);
+  sigaddset(&this->mask, SIGINT);
+  sigaddset(&this->mask, SIGHUP);
+  sigaddset(&this->mask, SIGKILL);
+  sigaddset(&this->mask, SIGUSR1);
+  sigaddset(&this->mask, SIGVTALRM);
+  sigaddset(&this->mask, SIGUSR2);
+  sigaddset(&this->mask, SIGPIPE);
+  sigaddset(&this->mask, SIGIO);
+
+  assert(sigprocmask(SIG_BLOCK, &this->mask, NULL)!=-1);
+
+  this->sfd = signalfd(-1, &this->mask, SFD_CLOEXEC|SFD_NONBLOCK);
+  assert(this->sfd != -1); 
+}
+
+static void
+sigprocCleanup(sigproc_t *this)
+{
+  VPRINT("%p\n", this);
+  if (this->sfd != -1) {
+    close(this->sfd);
+    this->sfd = -1;
+    sigemptyset(&this->mask);
+  }
+}
+
 static bool checkfd(int fd)
 {
   struct stat sb;
@@ -984,6 +1096,9 @@ theLoop()
     }
   }
 
+  // switch over to using epoll events for signal handling from now on
+  sigprocRegisterEvents(&GBLS.sigproc, epollfd);
+
   // register for the monitor interface events
   monitorRegisterEvents(epollfd);
 
@@ -1012,13 +1127,9 @@ theLoop()
     if (nfds == -1) {
       if (verbose(1)) perror("epoll_wait");
       if (errno == EINTR) {
-	// process signal handler state
-	if (GBLS.exitsignaled) {
-	  VPRINT("%s: EINTR: Exited Signaled %d\n", __func__, GBLS.signal); 
-	  rc = false;
-	  goto done;
-	}
-	VLPRINT(3, "%s: EINTR: Continuing\n", __func__);
+	// maybe we got a signal we are not handling or something
+	// else made us wakeup ...  log it but just keep on going 
+	VLPRINT(2, "%s: EINTR: Continuing\n", __func__);
 	continue;
       }
       if (errno == EINVAL) {
@@ -1209,13 +1320,7 @@ void cleanup(void)
   }
   if (GBLS.fsmntptdir) { free(GBLS.fsmntptdir); GBLS.fsmntptdir = NULL; }
   if (GBLS.cwd) { free(GBLS.cwd); GBLS.cwd = NULL; }
-}
-
-void
-exitsignalhandler(int sig)
-{
-  GBLS.exitsignaled = true;
-  GBLS.signal = sig;
+  sigprocCleanup(&GBLS.sigproc);
 }
 
 static bool
@@ -1290,6 +1395,7 @@ GBLSInit()
   ttyInit(&(GBLS.bcsttty),NULL,true);
   fsInit(&(GBLS.fs),false,NULL,true);
   monInit(false,NULL,true);
+  sigprocInit(&(GBLS.sigproc), true);
 }
 
 char * cwdPrefix(const char *path) {
@@ -1299,20 +1405,6 @@ char * cwdPrefix(const char *path) {
     return strdup(npath);
   }
   return strdup(GBLS.cwd);
-}
-
-void setsignalhandlers()
-{
-  signal(SIGALRM, exitsignalhandler);
-  signal(SIGTERM, exitsignalhandler);
-  signal(SIGINT, exitsignalhandler);
-  signal(SIGHUP, exitsignalhandler);
-  signal(SIGKILL, exitsignalhandler);
-  signal(SIGUSR1, exitsignalhandler);
-  signal(SIGVTALRM, exitsignalhandler);
-  signal(SIGUSR2, exitsignalhandler);
-  signal(SIGPIPE, exitsignalhandler);
-  signal(SIGIO, exitsignalhandler);
 }
 
 int main(int argc, char **argv)
@@ -1343,7 +1435,6 @@ int main(int argc, char **argv)
   }
   
   atexit(cleanup);    // from this point on exits will trigger cleanups 
-  setsignalhandlers();
   
   // ok lets start creating resources
   // create the initial set of command lines from the specs passed in
@@ -1375,6 +1466,8 @@ int main(int argc, char **argv)
   // create the monitor tty
   monttyCreate();
 
+  // sigproc is not affected by areguments so there is no need to reinit it
+  
   if (!theLoop()) EEXIT();
 
   return EXIT_SUCCESS;

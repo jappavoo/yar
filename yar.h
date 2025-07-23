@@ -61,6 +61,12 @@ typedef struct monitor {
                                  // and no error messages!
 } mon_t;
 
+typedef struct signalprocessor {
+  evntdesc_t  ed;
+  int         sfd;
+  sigset_t    mask;
+} sigproc_t;
+
 #define monprintf(...) if (GBLS.mon.tty.opens != 0 && !GBLS.mon.silent)		\
     { fprintf(GBLS.mon.fileptr, __VA_ARGS__); fflush(GBLS.mon.fileptr); }
 
@@ -72,6 +78,7 @@ typedef struct {
   tty_t  bcsttty;             // broadcast tty
   mon_t  mon;                 // monitor object: control interface to yar
   fs_t   fs;                  // filesystem object: control interface to yar
+  sigproc_t sigproc;          // signal procesing object
   cmd_t *cmds;                // hashtable of cmds
   cmd_t *slowestcmd;          // pointer to the slowest cmd so that we can pace
                               // broadcast tty reads based on this command
