@@ -315,6 +315,8 @@ GBLSDump(FILE *f)
   fprintf(f, "GBLS.pid=%" PRIdMAX "\n", (intmax_t)GBLS.pid);
   fprintf(f, "GBLS.verbose=%d\n", GBLS.verbose);
   fprintf(f, "GBLS.logpath=%s GBLS.logfile=%p\n", GBLS.logpath, GBLS.logfile);
+  fprintf(f, "GBLS.readystr=%s GBLS.readystrlen=%d GBLS.cmdsreadycnt=%d\n", GBLS.readystr,
+	  GBLS.readystrlen, GBLS.cmdsreadycnt);
   fprintf(f, "GBLS.stopstr=%s\n", GBLS.stopstr);
   fprintf(f, "GBLS.defaultcmddelay=%f\n", GBLS.defaultcmddelay);
   fprintf(f, "GBLS.restartcmddelay=%f\n", GBLS.restartcmddelay);
@@ -586,6 +588,11 @@ bcstttyEvent(void *obj, uint32_t evnts, int epollfd)
     char c;
     // pretend we are reading characters for the slowest command
     VLPRINT(3, "bcsttty(%p)\n", obj);
+    if (GBLS.readystr && GBLS.cmdsreadycnt < HASH_COUNT(GBLS.cmds)) {
+      VLPRINT(2, "%p: skipping ttyRead as all commands are not ready\n",
+	     obj);
+      goto done;
+    }
     int n = ttyReadChar(&GBLS.bcsttty, &c,
 			&(GBLS.slowestcmd->lastwrite),
 			GBLS.slowestcmd->delay);
@@ -1181,7 +1188,7 @@ argsParse(int argc, char **argv)
 {
     int opt;
     
-    while ((opt = getopt(argc, argv, "DKL:b:d:e:f:hlm:pr:s:vx")) != -1) {
+    while ((opt = getopt(argc, argv, "DKL:R:b:d:e:f:hlm:pr:s:vx")) != -1) {
     switch (opt) {
     case 'D':
       GBLS.daemonize = true;
@@ -1192,6 +1199,11 @@ argsParse(int argc, char **argv)
     case 'L':
       GBLS.uselog  = true;
       GBLS.logdir  = strdup(optarg);
+      break;
+    case  'R':
+      GBLS.readystr     = strdup(optarg);
+      GBLS.readystrlen  = strlen(optarg);
+      GBLS.cmdsreadycnt = 0;
       break;
     case 'b':
       GBLS.bcstttylink = strdup(optarg);
@@ -1312,6 +1324,11 @@ void cleanup(void)
   if (GBLS.logpath) { free(GBLS.logpath); GBLS.logpath=NULL;  }
   GBLS.initialcmdspecs = NULL;   // points to argv values
   GBLS.initialcmdspecscnt = 0;
+  if (GBLS.readystr) {
+    free(GBLS.readystr);
+    GBLS.readystr    = NULL;
+    GBLS.readystrlen = 0;
+  }
   if (GBLS.stopstr) { free(GBLS.stopstr); GBLS.stopstr = NULL; }
   if (GBLS.bcstttylink) { free(GBLS.bcstttylink); GBLS.bcstttylink = NULL; }
   if (GBLS.monttylinkdir) {

@@ -87,6 +87,10 @@ typedef struct {
                               // rather we pace reads and let the data
                               // buffer in the kernel tty port
   char **initialcmdspecs;     // cmd specs passed as command line args
+  char  *readystr;            // a string that a command sends to indicate it is
+                              // ready. If not null then will not send read
+                              // data from client tty's and send it to a command
+                              // until this string is received.
   char  *stopstr;             // a string to send to a command line when
                               // stopping
   char  *cwd;                 // current working directory path
@@ -100,6 +104,8 @@ typedef struct {
   double restartcmddelay;     // delay restarting command if exited with success
   double errrestartcmddelay;  // delay restarting command if exited with failure
   pid_t  pid;                 // pid of this yar processs
+  int    readystrlen;         // length of ready str, 0 if no ready string
+  int    cmdsreadycnt;        // count of commands that are ready
   int    verbose;             // verbosity level
   int    initialcmdspecscnt;  // number of initial cmd specs
   int    signal;              // signal handler will set this to signal number
@@ -122,6 +128,17 @@ typedef struct {
   bool   daemonize;           // start as daemon
 } globals_t;
 extern globals_t GBLS;
+
+// hack because I am too lazy to sort out head ordering
+__attribute__((unused)) static inline bool cmdIsReady(cmd_t *this)
+{
+  return (GBLS.readystrlen == 0 || GBLS.readystrlen == this->readycnt);
+}
+
+__attribute__((unused)) static inline void decCmdsReadyCnt()
+{
+  if (GBLS.readystrlen) GBLS.cmdsreadycnt--;
+}
 
 extern void cleanup();
 

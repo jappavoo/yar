@@ -28,6 +28,8 @@ typedef struct  {
   int     bcstprefixlen;      // length of prefix without null;
   int     pidfd;              // pid fd to monitor for termination
   int     exitstatus;         // exit status if command terminates
+  int     readycnt;           // count of ready string characters that have
+                              // matched the GBLS.readystr
   int     restartcnt;         // count of restarts
   bool    restart;            // restart this command if it exits
   bool    deleteonexit;       // delete this command if it exits 
@@ -52,5 +54,4 @@ __attribute__((unused)) static inline int cmdWriteChar(cmd_t *this, char c)
 {
   return ttyWriteChar(&(this->cmdtty), c, &(this->lastwrite));
 }
-
 #endif

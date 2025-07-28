@@ -67,6 +67,36 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
 	      n);
       
     }
+    // if ready string has been specified then this command is not
+    // considered ready to be written to until we recieve the ready string
+    // from it so ignore data and do not read from client ttys
+    if (GBLS.readystrlen && this->readycnt < GBLS.readystrlen) {
+      if (GBLS.readystr[this->readycnt]==c) {
+	// we have a matching character
+	VLPRINT(3, "READY: String match %c cnt=%d\n", c, this->readycnt);
+	this->readycnt++;
+	assert(this->readycnt <= GBLS.readystrlen);
+	if (this->readycnt == GBLS.readystrlen) {
+	  GBLS.cmdsreadycnt++;
+	  assert(GBLS.cmdsreadycnt <= HASH_COUNT(GBLS.cmds));
+	  VPRINT("%p(%s): READY: got ready string: %s\n", this,
+		 this->name, GBLS.readystr);
+	}
+#if 0
+	// if a ready string was specified we don't send it to the client
+	// or broadcast ttys
+	return n;
+#endif
+      } else {
+	// we have a ready string but current charcter did not id not match
+	// next expected character so reset ready cnt (eg start matching again
+	// from the beginning
+	VLPRINT(3, "READY: String match failed expecting %c got %c cnt=%d\n",
+		c, GBLS.readystr[this->readycnt],this->readycnt);
+	this->readycnt=0;
+      }
+    }
+      
     int i        = cmdbufNtoI(this->bufn); // account for circular buffer
     this->buf[i] = c;                      // store character in buffer
     assert(this->bufn+1 > this->bufn);     // yikes we rolled over
@@ -217,7 +247,12 @@ cmdPidEvent(void *obj, uint32_t evnts, int epollfd)
     // reset fields
     this->pidfd = -1;
     this->pid   = -1;
-
+    if (cmdIsReady(this)) { 
+      this->readycnt = 0;
+      decCmdsReadyCnt();
+      assert(GBLS.cmdsreadycnt>=0);
+    }
+    
     // cleanup on exit logic (takes precedence)
     if (this->deleteonexit) {
       VPRINT("%s: pid:%d cleaning up on exit status:%d\n",
@@ -342,6 +377,12 @@ cmdCltttyEvent(void *obj, uint32_t evnts, int epollfd)
 	  this->name, this);
   if (evnts & EPOLLIN) {
     char c;
+    if (!cmdIsReady(this)) {
+      VLPRINT(2, "skipping ready data from client tty %p:%s(%s) as cmd %p (%s) not ready"
+	     "(readycnt=%d)\n", tty, tty->link, tty->path, this, this->name,
+	     this->readycnt);
+      goto done;
+    }
     int n = ttyReadChar(&this->clttty, &c, &(this->lastwrite), this->delay);
     if (n) {
       if (verbose(2)) {
@@ -442,13 +483,15 @@ cmdDump(cmd_t *this, FILE *f, char *prefix)
   ascii_char2str(i, charstr);
   
   fprintf(f, "%scmd: this=%p pid=%ld pidfd=%d name=%s exitstatus=%d\n"
-	  "    restart=%d restartcnt=%d deleteonexit=%d\n    stopstr=\"%s\"\n"
+	  "    restart=%d restartcnt=%d deleteonexit=%d readycnt=%d\n"
+	  "    stopstr=\"%s\"\n"
 	  "    cmdstr=\"%s\"\n    cmdline=\"%s\"\n    bcstprefix=\"%s\"(len=%d)"
 	  " delay=%f log=%s bufn=%lu bufstart=%lu bufof=%d "
 	  "lastwrite=%ld:%ld lastchar:buf[%d]=%02x(%s)\n"
 	  , prefix, this,
 	  (long)this->pid, this->pidfd, this->name, this->exitstatus,
-	  this->restart, this->restartcnt, this->deleteonexit, this->stopstr,
+	  this->restart, this->restartcnt, this->deleteonexit, this->readycnt,
+	  this->stopstr,
 	  this->cmdstr, this->cmdline, this->bcstprefix, this->bcstprefixlen,
 	  this->delay, this->log, this->bufn, this->bufstart, this->bufof,
 	  this->lastwrite.tv_sec, this->lastwrite.tv_nsec, i, c, charstr);
@@ -502,6 +545,7 @@ cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
   this->deleteonexit      = GBLS.cmddelonexit; 
   this->lastwrite.tv_sec  = 0;
   this->lastwrite.tv_nsec = 0;
+  this->readycnt          = 0;
   this->pidfded           = (evntdesc_t){ NULL, NULL };
   ttyInit(&(this->cmdtty), NULL, true);
   if (ttylink) {
@@ -591,6 +635,7 @@ cmdStart(cmd_t *this, bool raw, int epollfd, double startdelay)
     fcntl(this->pidfd, F_SETFD, FD_CLOEXEC);
     this->pid          = cpid;
     this->pidfded      = (evntdesc_t){ .hdlr = cmdPidEvent, .obj = this };
+    this->readycnt     = 0;   
     cmdRegisterProcessEvents(this, epollfd);
     return true;
   }
@@ -633,6 +678,12 @@ cmdStop(cmd_t *this, int epollfd, bool force)
     } else {
       VPRINT("%s", "stopstr==NULL no stop string sent\n");
     }
+  }
+
+  if (cmdIsReady(this)) {
+    this->readycnt=0;
+    decCmdsReadyCnt();
+    assert(GBLS.cmdsreadycnt>=0);
   }
   
   // remove cmd pidfd from epoll as we know we are stopping it
