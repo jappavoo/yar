@@ -957,9 +957,9 @@ monInit(bool initdir, char *dir, bool iszeroed)
 		      .silent = true };
   if (initdir) {
     if (!monTtyLink(tmp, PATH_MAX, dir)) EEXIT();
-    if (!ttyInit(&(GBLS.mon.tty), tmp, true)) EEXIT();
+    if (!ttyInit(&(GBLS.mon.tty), tmp, NULL, NULL, true)) EEXIT();
   } else {
-    if (!ttyInit(&(GBLS.mon.tty), NULL, true)) EEXIT();
+    if (!ttyInit(&(GBLS.mon.tty), NULL, NULL, NULL, true)) EEXIT();
   }
 }
 
@@ -1409,7 +1409,7 @@ GBLSInit()
   // do an first round of init calls to get things in a sane
   // state incase we have to call cleanup before these
   // objects can get configured correctly
-  ttyInit(&(GBLS.bcsttty),NULL,true);
+  ttyInit(&(GBLS.bcsttty),NULL,NULL,NULL,true);
   fsInit(&(GBLS.fs),false,NULL,true);
   monInit(false,NULL,true);
   sigprocInit(&(GBLS.sigproc), true);
@@ -1454,6 +1454,13 @@ int main(int argc, char **argv)
   atexit(cleanup);    // from this point on exits will trigger cleanups 
   
   // ok lets start creating resources
+  
+  // init monitor tty
+  if (GBLS.monttylinkdir==NULL) GBLS.monttylinkdir = cwdPrefix(NULL); // mallocs
+  monInit(true, GBLS.monttylinkdir, true);  
+  // create the monitor tty
+  monttyCreate();
+
   // create the initial set of command lines from the specs passed in
   // via argv
   for (int i=0; i<GBLS.initialcmdspecscnt; i++) {
@@ -1466,8 +1473,11 @@ int main(int argc, char **argv)
   if (GBLS.bcstttylink == NULL) {
     GBLS.bcstttylink = cwdPrefix(DEFAULT_BCSTTTY_LINK); // mallocs
   }
-  if (!ttyInit(&GBLS.bcsttty, GBLS.bcstttylink, true)) EEXIT();
- 
+  {
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s.mon", GBLS.bcstttylink);
+    if (!ttyInit(&GBLS.bcsttty, GBLS.bcstttylink, tmp, GBLS.mon.tty.link, true)) EEXIT();
+  }
   // create the broadcast tty
   bcstttyCreate();
 
@@ -1477,11 +1487,6 @@ int main(int argc, char **argv)
   // create the fs
   if (!fsCreate(&(GBLS.fs), argv[0], yarfsCreate)) EEXIT();
 
-  // init monitor tty
-  if (GBLS.monttylinkdir==NULL) GBLS.monttylinkdir = cwdPrefix(NULL); // mallocs
-  monInit(true, GBLS.monttylinkdir, true);  
-  // create the monitor tty
-  monttyCreate();
 
   // sigproc is not affected by areguments so there is no need to reinit it
   

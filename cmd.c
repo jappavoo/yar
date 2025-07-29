@@ -547,12 +547,16 @@ cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
   this->lastwrite.tv_nsec = 0;
   this->readycnt          = 0;
   this->pidfded           = (evntdesc_t){ NULL, NULL };
-  ttyInit(&(this->cmdtty), NULL, true);
+  ttyInit(&(this->cmdtty), NULL, NULL, NULL, true);
   if (ttylink) {
-    ttyInit(&(this->clttty), ttylink, true);
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s.mon", ttylink);
+    ttyInit(&(this->clttty), ttylink, tmp, GBLS.mon.tty.link, true);
   } else {
+    char tmp[PATH_MAX];
     ttylink = cwdPrefix(name);
-    ttyInit(&(this->clttty), ttylink, true);
+    snprintf(tmp, sizeof(tmp), "%s.mon", ttylink);
+    ttyInit(&(this->clttty), ttylink, tmp, GBLS.mon.tty.link, true);
     free(ttylink);
   }
   return true;

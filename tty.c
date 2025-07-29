@@ -7,10 +7,10 @@
 extern void
 ttyDump(tty_t *this, FILE *f, char *prefix)
 {
-  fprintf(f, "%stty: this=%p path=%s link=%s \n"
+  fprintf(f, "%stty: this=%p path=%s link=%s extrasrc=%s extradst=%s\n"
              "       dfd=%d sfd=%d ifd=%d iwd=%d\n"
 	  "       rbytes=%lu wbytes=%lu opens=%d\n",
-	  prefix, this,  this->path, this->link,
+	  prefix, this,  this->path, this->link, this->extrasrc, this->extradst,
 	  this->dfd, this->sfd, this->ifd, this->iwd,
 	  this->rbytes, this->wbytes, this->opens);
 }
@@ -94,13 +94,16 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
 }
 
 extern bool
-ttyInit(tty_t *this, char *ttylink, bool iszeroed)
+ttyInit(tty_t *this, char *ttylink, char *extrasrc, char *extradest,
+	bool iszeroed)
 {
   if (!iszeroed) bzero(this, sizeof(tty_t));
   // all other values are now zeroed 
   // a non null tty link means the tty is a client tty see ttyIsClient in .h
   assert(this->link == NULL); // there has been a lot of churn so for my sanity
-  this->link     = (ttylink) ? strdup(ttylink) : NULL;  
+  this->link     = (ttylink) ? strdup(ttylink) : NULL;
+  this->extrasrc = (extrasrc) ? strdup(extrasrc) : NULL;  
+  this->extradst = (extradest) ? strdup(extradest) : NULL;
   this->dfd      = -1;
   this->sfd      = -1;
   this->ifd      = -1;
@@ -120,7 +123,12 @@ ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw)
     EPRINT(stderr, "%s already exists\n", this->link);
     goto cleanup;
   }
-  
+
+  if (this->extrasrc != NULL && access(this->extrasrc, F_OK)==0) {
+    EPRINT(stderr, "%s already exists\n", this->link);
+    goto cleanup;
+  }
+
   this->dfd = ptyMasterOpen(this->path, TTY_MAX_PATH);
   if (this->dfd == -1) {
     perror("ptyMasterOpen failed:");
@@ -157,6 +165,16 @@ ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw)
       perror("failed tty link create failed");
       goto cleanup;
     }
+  }
+
+  // create extra link if specified
+  if (this->extrasrc != NULL) {
+    VLPRINT(2, "linking %s->%s\n", this->extrasrc, this->extradst);
+    int rc =symlink(this->extradst, this->extrasrc);
+    if (rc!=0) {
+      perror("failed tty extra link create failed");
+      goto cleanup;
+    }    
   }
   
   // setup register for inotify events on the pts to track opens and closes 
@@ -331,6 +349,16 @@ ttyCleanup(tty_t *this)
     }
     free(this->link);
   }
+  if (this->extrasrc != NULL) {
+    if (this->extrasrc[0] != '\0') {
+      if (unlink(this->extrasrc) != 0) {
+	perror("unlink tty->extrasrc");
+      }
+    }
+    free(this->extrasrc);
+  }
+  if (this->extradst != NULL) free(this->extradst);
+  
   // reset values
   bzero(this, sizeof(tty_t));
   this->dfd     = -1;

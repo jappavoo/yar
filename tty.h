@@ -31,6 +31,8 @@
 typedef struct {
   char      path[TTY_MAX_PATH];// tty path (sub-tty dev path)
   char     *link;              // link path to tty path (null for command ttys)
+  char     *extrasrc;          // extra link that the tty will create and
+  char     *extradst;          // remove pointing form extrasrc to extradst
   uint64_t  rbytes;            // number of bytes read from tty
   uint64_t  wbytes;            // number of bytes written to tty
   uint64_t  delaycnt;          // number of times we delayed reading the tty
@@ -57,7 +59,9 @@ typedef struct {
 } tty_t;
 
 extern void ttyDump(tty_t *this, FILE *f, char *prefix);
-extern bool ttyInit(tty_t *this, char *ttylink, bool iszeroed);
+extern bool ttyInit(tty_t *this, char *ttylink,
+		    char *extrasrc, char *extradst,
+		    bool iszeroed);
 //extern bool ttySetlink(tty_t *this, char *ttylink);
 extern bool ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw);
 extern bool ttyRegisterEvents(tty_t *this, int epollfd);
