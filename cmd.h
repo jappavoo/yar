@@ -44,6 +44,7 @@ extern bool cmdStop(cmd_t *this, int epollfd, bool force);
 extern bool cmdRegisterttyEvents(cmd_t *this, int epollfd);
 extern bool cmdRegisterProcessEvents(cmd_t *this, int epollfd);
 extern bool cmdCleanup(cmd_t *this);
+extern void cmdttyDrain(cmd_t *this);
 
 __attribute__((unused)) static inline bool cmdIsRunning(cmd_t *this)
 {

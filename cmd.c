@@ -196,20 +196,20 @@ cmdttyProcessOutput(cmd_t *this, uint32_t evnts)
     }
     if (verbose(3)) cmdDump(this, stderr, "CMD OUTPUT BUFFERED:");
   } else {
-    EPRINT(stderr, "read returned: %d\n", n);
-    perror("read");
-    NYI;
+    if (errno!=EAGAIN) {;
+      EPRINT(stderr, "read returned: %d\n", n);
+      perror("read");
+      NYI;
+    }
   }
   return n;
 }
 
-static void
+extern void
 cmdttyDrain(cmd_t *this)
 {
   // drain any remaining data???
-  while (cmdttyProcessOutput(this,0)>0) {
-    VLPRINT(2, "%p: got data after HUP", this->name);
-  }
+  while (cmdttyProcessOutput(this,0)>0);
 }
   
 // EVENT HANDLERS
@@ -378,7 +378,7 @@ cmdCltttyEvent(void *obj, uint32_t evnts, int epollfd)
   if (evnts & EPOLLIN) {
     char c;
     if (!cmdIsReady(this)) {
-      VLPRINT(2, "skipping ready data from client tty %p:%s(%s) as cmd %p (%s) not ready"
+      VLPRINT(2, "skipping data from client tty %p:%s(%s) as cmd %p (%s) not ready"
 	     "(readycnt=%d)\n", tty, tty->link, tty->path, this, this->name,
 	     this->readycnt);
       goto done;

@@ -157,6 +157,10 @@ ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw)
     ttySetRaw(sfd, NULL);
   }
 
+  // we use non blocking reads and watch for EAGAIN 
+  // to see when we have drained the clinet tty
+  fdSetnonblocking(sfd);
+
   // create file system link to the sub-tty (it is a client tty)
   if (this->link != NULL) {
     VLPRINT(2, "linking %s->%s\n", this->path, this->link);

@@ -15,6 +15,7 @@ globals_t GBLS;
 
 static int monExit(int, int);
 static int monAdd(int, int);
+static int monDrain(int, int);
 static int monIdleExit(int, int);
 static int monDel(int, int);
 static int monList(int, int);
@@ -64,15 +65,17 @@ struct MonCmdDesc {
 } MonCmds[] = {
   {.name = "help", .usage="display 'yar' usage documentation",
    .cmd=monHelp },
+  {.name = "del",  .usage="delete command line instance requires command name:"
+                          "\n\t\t<name>",
+   .cmd=monDel },
+  {.name = "d",  .usage=NULL, .cmd=monDel },
+  {.name = "drain", .usage="drain client and broadcast ttys.\n",
+   .cmd=monDrain },
   {.name = "add",  .usage="add command line instance requires command "
                           "specification:\n"
                           "\t\t<name,pty,log,delay,command line>",
    .cmd=monAdd },
   {.name = "a",    .usage=NULL, .cmd=monAdd },
-  {.name = "del",  .usage="delete command line instance requires command name:"
-                          "\n\t\t<name>",
-   .cmd=monDel },
-  {.name = "d",  .usage=NULL, .cmd=monDel },
   {.name = "list", .usage="[-l|-d] list current command line instances.\n"
                           "\t\t-l long listing, -d debug dump.",
    .cmd=monList },
@@ -748,6 +751,37 @@ monDel(int args, int epollfd)
   if (HASH_COUNT(GBLS.cmds) == 0 && GBLS.exitonidle) {
     cleanup();
     exit(EXIT_SUCCESS);
+  }
+  return 0;
+}
+
+int
+monDrain(int args, int epollfd)
+{
+  cmd_t *cmd, *tmp;
+  char c;
+  int n;
+  
+  HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
+    // drain cmd output tty
+    cmdttyDrain(cmd);  // read any outstanding command output and process
+    cmd->bufstart = 0; cmd->bufn = 0;    // reset buffer
+    // drain client tty buffer
+    if (cmd->clttty.sfd != -1) {
+      while (true) {
+	n = read(cmd->clttty.sfd, &c, 1);
+	if (n==0) break;  // don't really expect EOF
+	if (n<0 && errno==EAGAIN) break; // nothing left to read
+      }
+    }
+  }
+  // drain broadcast tty
+  if (GBLS.bcsttty.sfd != -1) {
+    while (true) {
+      n = read(GBLS.bcsttty.sfd, &c, 1);
+      if (n==0) break;  // don't really expect EOF
+      if (n<0 && errno==EAGAIN) break; // nothing left to read
+    }
   }
   return 0;
 }
