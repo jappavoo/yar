@@ -29,12 +29,14 @@
 //      to exec).  The dom-tty will be used for internal communciation
 //      betweem Yar and the command connected to the sub-tty.
 typedef struct {
-  char      path[TTY_MAX_PATH];// tty path (sub-tty dev path)
+  char      path[TTY_MAX_PATH]; // tty path (sub-tty dev path)
+  char      discards[1024];    // first n discarded data 
   char     *link;              // link path to tty path (null for command ttys)
   char     *extrasrc;          // extra link that the tty will create and
   char     *extradst;          // remove pointing form extrasrc to extradst
   uint64_t  rbytes;            // number of bytes read from tty
   uint64_t  wbytes;            // number of bytes written to tty
+  uint64_t  wdbytes;           // number of bytes discarded on writes to tty
   uint64_t  delaycnt;          // number of times we delayed reading the tty
   int       dfd;               // dom fd : use by yar to communicate
                                // bytes to and from the dom-tty which is
@@ -90,11 +92,37 @@ __attribute__((unused)) static inline bool ttyIsCmdtty(tty_t *this)
 
 __attribute__((unused)) static inline int ttySubInQCnt(tty_t *this)
 {
-  int cnt; assert(ioctl(this->sfd, TIOCINQ, &cnt)==0); return cnt;
+  int cnt;
+  if (this->sfd == -1) return 0;
+  assert(ioctl(this->sfd, TIOCINQ, &cnt)==0); return cnt;
 }
 __attribute__((unused)) static inline void ttySubFlush(tty_t *this)
 {
+  if (this->sfd == -1) return;
   tcflush(this->sfd, TCIFLUSH);
 };
+
+__attribute__((unused)) static inline int ttyDomInQCnt(tty_t *this)
+{
+  int cnt;
+  if (this->dfd == -1) return 0;
+  assert(ioctl(this->dfd, TIOCINQ, &cnt)==0); return cnt;
+}
+__attribute__((unused)) static inline void ttyDomFlush(tty_t *this)
+{
+  if (this->dfd == -1) return;
+  tcflush(this->dfd, TCIFLUSH);
+};
+
+__attribute__((unused)) static inline bool ttyIdle(tty_t *this)
+{
+  assert(ttyIsClttty(this));
+  if (this->opens == 0 &&  ttyDomInQCnt(this) == 0) {
+    return true;
+  }
+  return false;
+};
+
+
 #endif
 

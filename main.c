@@ -1,7 +1,6 @@
 //012345678901234567890123456789012345678901234567890123456789012345678901234567
 #include "yar.h"
 #include <getopt.h>
-#include <signal.h>
 #include <sys/signalfd.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -759,30 +758,15 @@ int
 monDrain(int args, int epollfd)
 {
   cmd_t *cmd, *tmp;
-  char c;
-  int n;
-  
   HASH_ITER(hh, GBLS.cmds, cmd, tmp) {
     // drain cmd output tty
     cmdttyDrain(cmd);  // read any outstanding command output and process
     cmd->bufstart = 0; cmd->bufn = 0;    // reset buffer
     // drain client tty buffer
-    if (cmd->clttty.sfd != -1) {
-      while (true) {
-	n = read(cmd->clttty.sfd, &c, 1);
-	if (n==0) break;  // don't really expect EOF
-	if (n<0 && errno==EAGAIN) break; // nothing left to read
-      }
-    }
+    ttySubFlush(&(cmd->clttty));
   }
   // drain broadcast tty
-  if (GBLS.bcsttty.sfd != -1) {
-    while (true) {
-      n = read(GBLS.bcsttty.sfd, &c, 1);
-      if (n==0) break;  // don't really expect EOF
-      if (n<0 && errno==EAGAIN) break; // nothing left to read
-    }
-  }
+  ttySubFlush(&(GBLS.bcsttty));
   return 0;
 }
 
@@ -808,6 +792,11 @@ monList(int args, int epollfd)
       if (GBLS.mon.tty.opens !=0 ) cmdDump(cmd,GBLS.mon.fileptr, "\n");
     } else monprintf("\n");
   }
+
+  if (dflg && GBLS.bcsttty.sfd != -1 && GBLS.bcsttty.dfd != -1 ) {
+    ttyDump(&(GBLS.bcsttty), GBLS.mon.fileptr, "GBLS.bcsttty: " );
+  }
+
   return 0;
 }
 
@@ -1077,23 +1066,14 @@ sigprocInit(sigproc_t *this, bool iszeroed)
   this->sfd = -1;
   this->ed  = (evntdesc_t){ .obj = this, .hdlr=sigEvent }; 
 
-  sigemptyset(&this->mask);
+  sigemptyset(&(this->mask));
   // block all the signals so that we avoid standard signal handling
   // behavior --> we will use a signal fd to convert them into events
-  sigaddset(&this->mask, SIGALRM);
-  sigaddset(&this->mask, SIGTERM);
-  sigaddset(&this->mask, SIGINT);
-  sigaddset(&this->mask, SIGHUP);
-  sigaddset(&this->mask, SIGKILL);
-  sigaddset(&this->mask, SIGUSR1);
-  sigaddset(&this->mask, SIGVTALRM);
-  sigaddset(&this->mask, SIGUSR2);
-  sigaddset(&this->mask, SIGPIPE);
-  sigaddset(&this->mask, SIGIO);
+  sigAddTermSignals(&(this->mask));
+  
+  assert(sigprocmask(SIG_BLOCK, &(this->mask), NULL)!=-1);
 
-  assert(sigprocmask(SIG_BLOCK, &this->mask, NULL)!=-1);
-
-  this->sfd = signalfd(-1, &this->mask, SFD_CLOEXEC|SFD_NONBLOCK);
+  this->sfd = signalfd(-1, &(this->mask), SFD_CLOEXEC|SFD_NONBLOCK);
   assert(this->sfd != -1); 
 }
 
@@ -1522,7 +1502,7 @@ int main(int argc, char **argv)
   if (!fsCreate(&(GBLS.fs), argv[0], yarfsCreate)) EEXIT();
 
 
-  // sigproc is not affected by areguments so there is no need to reinit it
+  // sigproc is not affected by arguments so there is no need to reinit it
   
   if (!theLoop()) EEXIT();
 

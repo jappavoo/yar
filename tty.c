@@ -7,12 +7,22 @@
 extern void
 ttyDump(tty_t *this, FILE *f, char *prefix)
 {
+  int din, dout, sin, sout;
+  ttyPortSpace(this, &din, &dout, &sin, &sout);
   fprintf(f, "%stty: this=%p path=%s link=%s extrasrc=%s extradst=%s\n"
              "       dfd=%d sfd=%d ifd=%d iwd=%d\n"
-	  "       rbytes=%lu wbytes=%lu opens=%d\n",
+	  "       rbytes=%lu wbytes=%lu wdbytes=%lu opens=%d domInQ=%d domout=%d"
+	  " subInQ=%d subOut=%d\n",
 	  prefix, this,  this->path, this->link, this->extrasrc, this->extradst,
 	  this->dfd, this->sfd, this->ifd, this->iwd,
-	  this->rbytes, this->wbytes, this->opens);
+	  this->rbytes, this->wbytes, this->wdbytes, this->opens, din, dout,
+	  sin, sout);
+  if (this->wdbytes) {
+    hexdump(f, (uint8_t*)(this->discards),
+	    (this->wdbytes<sizeof(this->discards)) ? this->wdbytes :
+	    sizeof(this->discards));
+  }
+	    
 }
 
 static evnthdlrrc_t
@@ -285,17 +295,24 @@ ttyWriteBuf(tty_t *this, char *buf, int len,  struct timespec *ts)
       NYI;
     }
   } else {
+    int used = this->wdbytes;
+    int free = sizeof(this->discards)-used;
+    if (free<0) free=0;
+    int nb = (len<=free) ? len : free;
+    
     // no one is listening so pretend the write succeeded
+    memcpy(&(this->discards[used]), buf, nb);
+    this->wdbytes += len;		   
     n=len;
   }
   return n;
 }
 
 extern void
-ttyPortSpace(tty_t *this, int *min, int *mout, int *sin, int *sout)
+ttyPortSpace(tty_t *this, int *din, int *dout, int *sin, int *sout)
 {
-  assert(ioctl(this->dfd, TIOCINQ, min)==0);
-  assert(ioctl(this->dfd, TIOCOUTQ, mout)==0);
+  assert(ioctl(this->dfd, TIOCINQ, din)==0);
+  assert(ioctl(this->dfd, TIOCOUTQ, dout)==0);
   assert(ioctl(this->sfd, TIOCINQ, sin)==0);
   assert(ioctl(this->sfd, TIOCOUTQ, sout)==0);
 }

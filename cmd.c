@@ -383,7 +383,7 @@ cmdCltttyEvent(void *obj, uint32_t evnts, int epollfd)
 	     this->readycnt);
       goto done;
     }
-    int n = ttyReadChar(&this->clttty, &c, &(this->lastwrite), this->delay);
+    int n = ttyReadChar(tty, &c, &(this->lastwrite), this->delay);
     if (n) {
       if (verbose(2)) {
 	  asciistr_t charstr;
@@ -401,6 +401,11 @@ cmdCltttyEvent(void *obj, uint32_t evnts, int epollfd)
 	EPRINT(stderr, "  write returned: n=%d\n", n);
 	NYI;
       }
+      // allow the command to be stopped if this read has caused it to go 
+      // idle.  cmdStop internally has the logic to check and take care of
+      // this case
+      cmdStop(this, epollfd, false);
+      
       VLPRINT(2, "--->  CLTTTY: END: EIN: tty(%p):%s(%s) fd:%d"
 	      " evnts:0x%08x n:%d cmd:%p(%s)\n",
 	      tty, tty->link, tty->path, fd, evnts, n, this, this->name);      
@@ -588,6 +593,9 @@ cmdStart(cmd_t *this, bool raw, int epollfd, double startdelay)
   if (cpid==0) {
     // CHILD: Run the command line in the new process
     // inspired by pty_fork form tlpi-dist
+
+    // unblock the term signals that YAR's signal processor has blocked
+    assert(sigprocmask(SIG_UNBLOCK, &(GBLS.sigproc.mask), NULL)!=-1);
     
     // create a new session 
     assert(setsid() != -1);
@@ -652,8 +660,12 @@ cmdStop(cmd_t *this, int epollfd, bool force)
   // times on an instance
   if (!cmdIsRunning(this)) return false;
 			     
-  if (force == false && (this->clttty.opens != 0 || GBLS.bcsttty.opens != 0)) {
-    return false;
+  if (force == false) {  // ignore checks if force stop
+    // check to see that the client tty is not idle (not open or pending data)
+    // and the same for the broadcast
+    if (!ttyIdle(&(this->clttty)) || !ttyIdle(&(GBLS.bcsttty))) {
+      return false;
+    }
   }
 
   // send stop string if there is one

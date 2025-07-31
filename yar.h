@@ -22,6 +22,7 @@
 #include <sys/ioctl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <signal.h>
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 12)
 #include <fuse_lowlevel.h>
 
@@ -162,6 +163,21 @@ __attribute__((unused)) static bool
 ascii_isprintable(int c) { return ( (c>=' ' && c<='~') ||
 					 (c=='\n' || c=='\r' || c=='\t') ); }
 
+__attribute__((unused)) static void
+sigAddTermSignals(sigset_t *mask)
+{
+  sigaddset(mask, SIGALRM);
+  sigaddset(mask, SIGTERM);
+  sigaddset(mask, SIGINT);
+  sigaddset(mask, SIGHUP);
+  sigaddset(mask, SIGQUIT);
+  sigaddset(mask, SIGUSR1);
+  sigaddset(mask, SIGVTALRM);
+  sigaddset(mask, SIGUSR2);
+  sigaddset(mask, SIGPIPE);
+  sigaddset(mask, SIGIO);
+}
+
 typedef char asciistr_t[4];
 extern asciistr_t ascii_nonprintable[32];
 
@@ -199,6 +215,7 @@ extern void fdSetnonblocking(int fd);
 extern void delaysec(double delay);
 
 extern char * cwdPrefix(const char *path);
+
 
 
 #define NYI { fprintf(stderr, "%s: %d: NYI\n", __func__, __LINE__); assert(0); }
