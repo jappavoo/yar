@@ -17,10 +17,10 @@ hexdump(FILE *file, uint8_t *mem, size_t bytes)
     fprintf(file, "|");
     for (int i=0;i<16;i++) {
       unsigned char c=mem[offset+i];
-      if (c>=' ' && c<='~')  { fprintf(stderr, "%c", c); }
-      else  fprintf(stderr, ".");
+      if (c>=' ' && c<='~')  { fprintf(file, "%c", c); }
+      else  fprintf(file, ".");
     }
-    fprintf(stderr, "|\n");
+    fprintf(file, "|\n");
   }
   // deal with data that is left over that is less than 16 bytes
 
