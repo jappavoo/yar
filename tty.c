@@ -311,10 +311,10 @@ ttyWriteBuf(tty_t *this, char *buf, int len,  struct timespec *ts)
 extern void
 ttyPortSpace(tty_t *this, int *din, int *dout, int *sin, int *sout)
 {
-  assert(ioctl(this->dfd, TIOCINQ, din)==0);
-  assert(ioctl(this->dfd, TIOCOUTQ, dout)==0);
-  assert(ioctl(this->sfd, TIOCINQ, sin)==0);
-  assert(ioctl(this->sfd, TIOCOUTQ, sout)==0);
+  if (this->dfd != -1) assert(ioctl(this->dfd, TIOCINQ, din)==0);
+  if (this->dfd != -1) assert(ioctl(this->dfd, TIOCOUTQ, dout)==0);
+  if (this->sfd != -1) assert(ioctl(this->sfd, TIOCINQ, sin)==0);
+  if (this->sfd != -1) assert(ioctl(this->sfd, TIOCOUTQ, sout)==0);
 }
 
 extern int
