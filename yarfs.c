@@ -9,6 +9,7 @@ void
 yarfsUsage(FILE *fp)
 {
   fprintf(fp,
+	  " /pid   : readonly file : contents is pid of yar\n"
 	  " /cmds  : readonly file : contents is list of current command names\n"
 	  " /lcmds : readonly file : contents is long list of current commands\n"
 	  "         (name,tty,yarpid,command line)\n"
@@ -21,6 +22,52 @@ yarfsUsage(FILE *fp)
 	  "              type='mon'  v1=empty v2=empty\n"
 	  " /bcst  : readonly file : path of broadcast tty if enabled\n");
 }
+
+/*** /pid ***/
+static off_t pidSize()
+{
+  char pidstr[24];
+  int pidstrlen;
+  off_t n = 0;
+  pidstrlen = snprintf(pidstr, sizeof(pidstr), "%" PRIdMAX, (intmax_t)GBLS.pid);
+  n = pidstrlen;
+  return n;
+}
+
+static bool
+fs_pid_stat(fs_t *this, fs_file_t *file, struct stat *stbuf)
+{
+  VLPRINT(2, "%s %ld: ", file->name, file->ino);
+  stbuf->st_ino = file->ino;
+  stbuf->st_mode = S_IFREG | 0444;
+  stbuf->st_nlink = 1;
+  stbuf->st_size = pidSize();
+  VLPRINT(2, "%ld\n", stbuf->st_size);
+  return true; 
+}
+
+static bool
+fs_pid_read(fs_t *this, fs_file_t *file, fuse_req_t req, size_t size,
+			    off_t off)
+{
+  off_t  n = pidSize();
+  char *buf = malloc(n+1);
+  snprintf(buf, n+1, "%" PRIdMAX, (intmax_t)GBLS.pid);
+
+  int rc=fsFuseReplyBufLimited(req, buf, n, off, size);
+  if (rc!=0) fprintf(stderr, "fuse_reply_buf failed: %d", rc);
+    
+  free(buf);
+  return true;
+}
+
+fs_fileops_t fs_pid_ops = {
+  .stat    = fs_pid_stat,
+  .open    = NULL,
+  .read    = fs_pid_read,
+  .write   = NULL,
+  .readdir = NULL 
+};
 
 /*** /cmds ***/
 static off_t cmdNamesSize()
@@ -334,6 +381,8 @@ yarfsCreate(fs_t *fs, fs_ino_t rootino)
 {
   fs_file_t *item;
   VLPRINT(2, "fs=%p rootino=%ld\n", fs, rootino);
+  item = fsCreatefile(fs, rootino, "pid", NULL, &fs_pid_ops);
+  assert(item);
   item = fsCreatefile(fs, rootino, "cmds", NULL, &fs_cmds_ops);
   assert(item);
   item = fsCreatefile(fs, rootino, "lcmds", NULL, &fs_lcmds_ops);
