@@ -6,6 +6,12 @@
 
 #define TTY_MAX_PATH 256
 
+// a file system link 
+typedef struct link {
+  char *src;
+  char *dst;
+} link_t;
+
 // TTY Object
 // Uses a UNIX PTY pair of ttys, dom-tty (aka master in traditional UNIX lingo)
 // and sub-tty (aka slave in tranditional UNIX lingo), to represent a terminal
@@ -32,8 +38,8 @@ typedef struct {
   char      path[TTY_MAX_PATH]; // tty path (sub-tty dev path)
   char      discards[1024];    // first n discarded data 
   char     *link;              // link path to tty path (null for command ttys)
-  char     *extrasrc;          // extra link that the tty will create and
-  char     *extradst;          // remove pointing form extrasrc to extradst
+  link_t    extralink1;        // extralink1 that the tty will create and remove
+  link_t    extralink2;        // extralink2 that the tty will create and remove
   uint64_t  rbytes;            // number of bytes read from tty
   uint64_t  wbytes;            // number of bytes written to tty
   uint64_t  wdbytes;           // number of bytes discarded on writes to tty
@@ -62,7 +68,8 @@ typedef struct {
 
 extern void ttyDump(tty_t *this, FILE *f, char *prefix);
 extern bool ttyInit(tty_t *this, char *ttylink,
-		    char *extrasrc, char *extradst,
+		    char *extra1src, char *extra1dst,
+		    char *extra2src, char *extra2dst,
 		    bool iszeroed);
 //extern bool ttySetlink(tty_t *this, char *ttylink);
 extern bool ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw);

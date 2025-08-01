@@ -9,11 +9,14 @@ ttyDump(tty_t *this, FILE *f, char *prefix)
 {
   int din, dout, sin, sout;
   ttyPortSpace(this, &din, &dout, &sin, &sout);
-  fprintf(f, "%stty: this=%p path=%s link=%s extrasrc=%s extradst=%s\n"
+  fprintf(f, "%stty: this=%p path=%s link=%s extra1.src=%s extra1.dst=%s"
+	  "extra2.src=%s extra2.dst=%s\n"
              "       dfd=%d sfd=%d ifd=%d iwd=%d\n"
 	  "       rbytes=%lu wbytes=%lu wdbytes=%lu opens=%d domInQ=%d domout=%d"
 	  " subInQ=%d subOut=%d\n",
-	  prefix, this,  this->path, this->link, this->extrasrc, this->extradst,
+	  prefix, this,  this->path, this->link,
+	  this->extralink1.src, this->extralink1.dst,
+	  this->extralink2.src, this->extralink2.dst,
 	  this->dfd, this->sfd, this->ifd, this->iwd,
 	  this->rbytes, this->wbytes, this->wdbytes, this->opens, din, dout,
 	  sin, sout);
@@ -104,7 +107,8 @@ ttyNotifyEvent(void *obj, uint32_t evnts, int epollfd)
 }
 
 extern bool
-ttyInit(tty_t *this, char *ttylink, char *extrasrc, char *extradest,
+ttyInit(tty_t *this, char *ttylink, char *extra1src, char *extra1dest,
+	char *extra2src, char *extra2dest,
 	bool iszeroed)
 {
   if (!iszeroed) bzero(this, sizeof(tty_t));
@@ -112,8 +116,10 @@ ttyInit(tty_t *this, char *ttylink, char *extrasrc, char *extradest,
   // a non null tty link means the tty is a client tty see ttyIsClient in .h
   assert(this->link == NULL); // there has been a lot of churn so for my sanity
   this->link     = (ttylink) ? strdup(ttylink) : NULL;
-  this->extrasrc = (extrasrc) ? strdup(extrasrc) : NULL;  
-  this->extradst = (extradest) ? strdup(extradest) : NULL;
+  this->extralink1.src = (extra1src) ? strdup(extra1src) : NULL;  
+  this->extralink1.dst = (extra1dest) ? strdup(extra1dest) : NULL;
+  this->extralink2.src = (extra2src) ? strdup(extra2src) : NULL;  
+  this->extralink2.dst = (extra2dest) ? strdup(extra2dest) : NULL;
   this->dfd      = -1;
   this->sfd      = -1;
   this->ifd      = -1;
@@ -134,8 +140,13 @@ ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw)
     goto cleanup;
   }
 
-  if (this->extrasrc != NULL && access(this->extrasrc, F_OK)==0) {
-    EPRINT(stderr, "%s already exists\n", this->link);
+  if (this->extralink1.src != NULL && access(this->extralink1.src, F_OK)==0) {
+    EPRINT(stderr, "%s already exists\n", this->extralink1.src);
+    goto cleanup;
+  }
+
+  if (this->extralink2.src != NULL && access(this->extralink2.src, F_OK)==0) {
+    EPRINT(stderr, "%s already exists\n", this->extralink2.src);
     goto cleanup;
   }
 
@@ -182,15 +193,27 @@ ttyCreate(tty_t *this, evntdesc_t ed, evntdesc_t ned, bool raw)
   }
 
   // create extra link if specified
-  if (this->extrasrc != NULL) {
-    VLPRINT(2, "linking %s->%s\n", this->extrasrc, this->extradst);
-    int rc =symlink(this->extradst, this->extrasrc);
+  if (this->extralink1.src != NULL) {
+    assert(this->extralink2.dst != NULL);
+    VLPRINT(2, "linking %s->%s\n", this->extralink1.src, this->extralink1.dst);
+    int rc =symlink(this->extralink1.dst, this->extralink1.src);
     if (rc!=0) {
-      perror("failed tty extra link create failed");
+      perror("failed tty extra link 1 create failed");
       goto cleanup;
     }    
   }
-  
+
+  // create extra link if specified
+  if (this->extralink2.src != NULL) {
+    assert(this->extralink2.dst != NULL);
+    VLPRINT(2, "linking %s->%s\n", this->extralink2.src, this->extralink2.dst);
+    int rc =symlink(this->extralink2.dst, this->extralink2.src);
+    if (rc!=0) {
+      perror("failed tty extra link 2 create failed");
+      goto cleanup;
+    }    
+  }
+
   // setup register for inotify events on the pts to track opens and closes 
   this->ifd = inotify_init1(IN_NONBLOCK|IN_CLOEXEC);
   if (this->ifd == -1) {
@@ -370,15 +393,26 @@ ttyCleanup(tty_t *this)
     }
     free(this->link);
   }
-  if (this->extrasrc != NULL) {
-    if (this->extrasrc[0] != '\0') {
-      if (unlink(this->extrasrc) != 0) {
-	perror("unlink tty->extrasrc");
+  
+  if (this->extralink1.src != NULL) {
+    if (this->extralink1.src[0] != '\0') {
+      if (unlink(this->extralink1.src) != 0) {
+	perror("unlink tty->extralink1.src");
       }
     }
-    free(this->extrasrc);
+    free(this->extralink1.src);
   }
-  if (this->extradst != NULL) free(this->extradst);
+  if (this->extralink1.dst != NULL) free(this->extralink1.dst);
+
+  if (this->extralink2.src != NULL) {
+    if (this->extralink2.src[0] != '\0') {
+      if (unlink(this->extralink2.src) != 0) {
+	perror("unlink tty->extralink2.src");
+      }
+    }
+    free(this->extralink2.src);
+  }
+  if (this->extralink2.dst != NULL) free(this->extralink2.dst);
   
   // reset values
   bzero(this, sizeof(tty_t));

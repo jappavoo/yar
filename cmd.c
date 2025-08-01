@@ -552,16 +552,26 @@ cmdInit(cmd_t *this, char *cmdstr, char *name, char *cmdline, double delay,
   this->lastwrite.tv_nsec = 0;
   this->readycnt          = 0;
   this->pidfded           = (evntdesc_t){ NULL, NULL };
-  ttyInit(&(this->cmdtty), NULL, NULL, NULL, true);
+  ttyInit(&(this->cmdtty), NULL, NULL, NULL, NULL, NULL, true);
   if (ttylink) {
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof(tmp), "%s.mon", ttylink);
-    ttyInit(&(this->clttty), ttylink, tmp, GBLS.mon.tty.link, true);
+    char tmp1[PATH_MAX];
+    char tmp2[PATH_MAX];
+    snprintf(tmp1, sizeof(tmp1), "%s.mon", ttylink);
+    snprintf(tmp2, sizeof(tmp2), "%s.fs", ttylink);
+    ttyInit(&(this->clttty), ttylink,
+	    tmp1, GBLS.mon.tty.link,
+	    tmp2, GBLS.fs.mntpt,
+	    true);
   } else {
-    char tmp[PATH_MAX];
+    char tmp1[PATH_MAX];
+    char tmp2[PATH_MAX];
     ttylink = cwdPrefix(name);
-    snprintf(tmp, sizeof(tmp), "%s.mon", ttylink);
-    ttyInit(&(this->clttty), ttylink, tmp, GBLS.mon.tty.link, true);
+    snprintf(tmp1, sizeof(tmp1), "%s.mon", ttylink);
+    snprintf(tmp2, sizeof(tmp2), "%s.fs", ttylink);
+    ttyInit(&(this->clttty), ttylink,
+	    tmp1, GBLS.mon.tty.link,
+	    tmp2, GBLS.fs.mntpt,
+	    true);
     free(ttylink);
   }
   return true;
